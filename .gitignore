@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Database (ne pas versionner la BDD locale)
+*.db
+*.sqlite3
+
+# Uploads (médias utilisateurs)
+uploads/
+
+# Secrets (NE JAMAIS committer)
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+*.log

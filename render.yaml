@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: tournoi-backend
+    env: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
+    envVars:
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: RESPONSABLES_EMAILS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: FLASK_ENV
+        value: production
