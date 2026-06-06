@@ -22,15 +22,22 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     return _pool
 
 
-def get_db():
+class _PooledConn:
     """
-    Retourne une connexion tirée du pool.
-    conn.close() la remet dans le pool au lieu de la fermer vraiment.
+    Wrapper autour d'une connexion psycopg2 tirée du pool.
+    .close() remet la connexion dans le pool au lieu de la fermer vraiment.
+    Nécessaire car psycopg2 ≥ 2.9 interdit de remplacer l'attribut .close
+    d'un objet connection C-extension.
     """
-    pool = _get_pool()
-    conn = pool.getconn()
+    __slots__ = ("_conn", "_pool")
 
-    def _return_to_pool():
+    def __init__(self, conn, pool):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_pool", pool)
+
+    def close(self):
+        conn = object.__getattribute__(self, "_conn")
+        pool = object.__getattribute__(self, "_pool")
         try:
             if not conn.closed:
                 conn.rollback()
@@ -38,8 +45,23 @@ def get_db():
             pass
         pool.putconn(conn)
 
-    conn.close = _return_to_pool
-    return conn
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_conn"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_conn"), name, value)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def get_db():
+    """Retourne une connexion tirée du pool. conn.close() la remet dans le pool."""
+    pool = _get_pool()
+    return _PooledConn(pool.getconn(), pool)
 
 
 def get_cursor(conn):
