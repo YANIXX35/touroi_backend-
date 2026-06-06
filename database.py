@@ -4,7 +4,7 @@ import psycopg2
 import psycopg2.extras
 from config import ADMIN_USERNAME, ADMIN_PASSWORD
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 
 def get_db():
