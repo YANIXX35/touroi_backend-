@@ -23,6 +23,10 @@ app.register_blueprint(teams_bp)
 app.register_blueprint(matches_bp)
 app.register_blueprint(admin_bp)
 
+# Créer le dossier uploads et initialiser la BDD au démarrage (gunicorn inclus)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+init_db()
+
 
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
@@ -35,8 +39,6 @@ def health():
 
 
 if __name__ == "__main__":
-    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-    init_db()
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_ENV", "development") == "development"
     app.run(debug=debug, host="0.0.0.0", port=port)
