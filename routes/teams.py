@@ -96,12 +96,17 @@ def register_team():
         )
         team_id = cur.fetchone()["id"]
 
-        for player_name in players:
-            name_clean = player_name.strip() if isinstance(player_name, str) else (player_name.get("player_name") or "").strip()
+        for player in players:
+            if isinstance(player, str):
+                name_clean = player.strip()
+                photo_path = None
+            else:
+                name_clean = (player.get("player_name") or "").strip()
+                photo_path = player.get("photo_path") or None
             if name_clean:
                 cur.execute(
-                    "INSERT INTO players (team_id, player_name) VALUES (%s, %s)",
-                    (team_id, name_clean),
+                    "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s)",
+                    (team_id, name_clean, photo_path),
                 )
 
         conn.commit()

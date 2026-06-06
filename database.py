@@ -36,8 +36,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS players (
             id SERIAL PRIMARY KEY,
             team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-            player_name TEXT NOT NULL
+            player_name TEXT NOT NULL,
+            photo_path TEXT
         )
+    """)
+    cur.execute("""
+        ALTER TABLE players ADD COLUMN IF NOT EXISTS photo_path TEXT
     """)
 
     cur.execute("""
