@@ -1,12 +1,14 @@
 from flask import Blueprint, request, jsonify
 from database import get_db, get_cursor
-from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS
+from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS, UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
 from cache import invalidate as cache_invalidate
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
 from threading import Lock
+import os
+import uuid
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -262,3 +264,92 @@ def admin_delete_match(match_id):
     cache_invalidate("matches_list")
     cache_invalidate("results")
     return jsonify({"message": "Match supprimé"})
+
+
+# ─── Gestion des joueurs ───────────────────────────────────────────────────
+
+def _allowed_photo(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@admin_bp.route("/api/admin/teams/<int:team_id>/players", methods=["POST"])
+@token_required
+def admin_add_player(team_id):
+    data = request.get_json() or {}
+    player_name = (data.get("player_name") or "").strip()
+    photo_path = data.get("photo_path") or None
+    if not player_name:
+        return jsonify({"error": "Nom requis"}), 400
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s) RETURNING id",
+        (team_id, player_name, photo_path),
+    )
+    player_id = cur.fetchone()["id"]
+    conn.commit()
+    cur.close()
+    conn.close()
+    cache_invalidate("teams_list")
+    return jsonify({"id": player_id, "player_name": player_name, "photo_path": photo_path}), 201
+
+
+@admin_bp.route("/api/admin/players/<int:player_id>", methods=["PUT"])
+@token_required
+def admin_update_player(player_id):
+    data = request.get_json() or {}
+    player_name = (data.get("player_name") or "").strip()
+    if not player_name:
+        return jsonify({"error": "Nom requis"}), 400
+    conn = get_db()
+    cur = get_cursor(conn)
+    if "photo_path" in data:
+        cur.execute(
+            "UPDATE players SET player_name = %s, photo_path = %s WHERE id = %s",
+            (player_name, data["photo_path"], player_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE players SET player_name = %s WHERE id = %s",
+            (player_name, player_id),
+        )
+    conn.commit()
+    cur.close()
+    conn.close()
+    cache_invalidate("teams_list")
+    return jsonify({"message": "Joueur mis à jour"})
+
+
+@admin_bp.route("/api/admin/players/<int:player_id>", methods=["DELETE"])
+@token_required
+def admin_delete_player(player_id):
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("DELETE FROM players WHERE id = %s", (player_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    cache_invalidate("teams_list")
+    return jsonify({"message": "Joueur supprimé"})
+
+
+@admin_bp.route("/api/admin/uploads/photo", methods=["POST"])
+@token_required
+def admin_upload_photo():
+    try:
+        if "photo" not in request.files:
+            return jsonify({"error": "Aucun fichier"}), 400
+        file = request.files["photo"]
+        if not file.filename or not _allowed_photo(file.filename):
+            return jsonify({"error": "Format non autorisé (jpg, png, webp)"}), 400
+        from PIL import Image
+        ext = file.filename.rsplit(".", 1)[1].lower()
+        filename = f"player_{uuid.uuid4().hex}.{ext}"
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+        img = Image.open(file)
+        img.thumbnail(MAX_PHOTO_SIZE)
+        img.save(filepath)
+        return jsonify({"photo_path": filename}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
