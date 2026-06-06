@@ -37,7 +37,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 init_db()
 
 
-@app.route("/uploads/<path:filename>")
+@app.route("/uploads/<string:filename>")
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 

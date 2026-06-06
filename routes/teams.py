@@ -18,24 +18,34 @@ def get_teams():
     try:
         conn = get_db()
         cur = get_cursor(conn)
-        cur.execute("SELECT * FROM teams WHERE validated = 1 ORDER BY name")
-        teams = cur.fetchall()
-        result = []
-        for t in teams:
-            cur.execute("SELECT player_name FROM players WHERE team_id = %s", (t["id"],))
-            players = cur.fetchall()
-            result.append({
-                "id": t["id"],
-                "name": t["name"],
-                "captain_name": t["captain_name"],
-                "phone": t["phone"],
-                "logo_path": t["logo_path"],
-                "created_at": str(t["created_at"]) if t["created_at"] else None,
-                "players": [p["player_name"] for p in players],
-            })
+        cur.execute("""
+            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
+                   p.player_name
+            FROM teams t
+            LEFT JOIN players p ON p.team_id = t.id
+            WHERE t.validated = 1
+            ORDER BY t.name, p.id
+        """)
+        rows = cur.fetchall()
         cur.close()
         conn.close()
-        return jsonify(result)
+
+        teams_map: dict = {}
+        for row in rows:
+            tid = row["id"]
+            if tid not in teams_map:
+                teams_map[tid] = {
+                    "id": tid,
+                    "name": row["name"],
+                    "captain_name": row["captain_name"],
+                    "phone": row["phone"],
+                    "logo_path": row["logo_path"],
+                    "created_at": str(row["created_at"]) if row["created_at"] else None,
+                    "players": [],
+                }
+            if row["player_name"]:
+                teams_map[tid]["players"].append(row["player_name"])
+        return jsonify(list(teams_map.values()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -45,19 +55,29 @@ def get_team(team_id):
     try:
         conn = get_db()
         cur = get_cursor(conn)
-        cur.execute("SELECT * FROM teams WHERE id = %s AND validated = 1", (team_id,))
-        team = cur.fetchone()
-        if not team:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Équipe non trouvée"}), 404
-        cur.execute("SELECT player_name FROM players WHERE team_id = %s", (team_id,))
-        players = cur.fetchall()
-        result = dict(team)
-        result["created_at"] = str(result["created_at"]) if result["created_at"] else None
-        result["players"] = [p["player_name"] for p in players]
+        cur.execute("""
+            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
+                   p.player_name
+            FROM teams t
+            LEFT JOIN players p ON p.team_id = t.id
+            WHERE t.id = %s AND t.validated = 1
+            ORDER BY p.id
+        """, (team_id,))
+        rows = cur.fetchall()
         cur.close()
         conn.close()
+        if not rows:
+            return jsonify({"error": "Équipe non trouvée"}), 404
+        first = rows[0]
+        result = {
+            "id": first["id"],
+            "name": first["name"],
+            "captain_name": first["captain_name"],
+            "phone": first["phone"],
+            "logo_path": first["logo_path"],
+            "created_at": str(first["created_at"]) if first["created_at"] else None,
+            "players": [r["player_name"] for r in rows if r["player_name"]],
+        }
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -80,6 +100,10 @@ def register_team():
 
         if not name or not captain_name or not phone:
             return jsonify({"error": "Nom, capitaine et téléphone sont obligatoires"}), 400
+        if len(name) > 50:
+            return jsonify({"error": "Le nom de l'équipe ne doit pas dépasser 50 caractères"}), 400
+        if len(captain_name) > 80:
+            return jsonify({"error": "Le nom du capitaine ne doit pas dépasser 80 caractères"}), 400
         if len(players) == 0:
             return jsonify({"error": "Ajoutez au moins un joueur"}), 400
 
@@ -108,6 +132,8 @@ def register_team():
                 name_clean = (player.get("player_name") or "").strip()
                 photo_path = player.get("photo_path") or None
             if name_clean:
+                if len(name_clean) > 50:
+                    return jsonify({"error": f"Nom de joueur trop long (50 car. max) : {name_clean[:30]}"}), 400
                 cur.execute(
                     "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s)",
                     (team_id, name_clean, photo_path),
@@ -119,11 +145,13 @@ def register_team():
         team_row = dict(cur.fetchone())
         team_row["created_at"] = str(team_row["created_at"]) if team_row["created_at"] else None
 
-        # Email en arrière-plan — ne bloque pas la réponse
-        try:
-            send_registration_email(team_row, players)
-        except Exception:
-            pass
+        # Email envoyé dans un thread séparé — ne bloque pas la réponse HTTP
+        import threading
+        threading.Thread(
+            target=send_registration_email,
+            args=(team_row, list(players)),
+            daemon=True,
+        ).start()
 
         return jsonify({"message": "Inscription réussie ! En attente de validation.", "team_id": team_id}), 201
 

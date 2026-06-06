@@ -16,8 +16,8 @@ _responsables_raw = os.environ.get(
 RESPONSABLES_EMAILS = [e.strip() for e in _responsables_raw.split(",") if e.strip()]
 
 # --- Infos du tournoi ---
-TOURNOI_NOM = os.environ.get("TOURNOI_NOM", "Tournoi de Football Église 2024")
-TOURNOI_DATE_DEBUT = "2024-07-01"
+TOURNOI_NOM = os.environ.get("TOURNOI_NOM", "Tournoi FJU Côte d'Ivoire 2026")
+TOURNOI_DATE_DEBUT = "2026-06-13"
 TOURNOI_LIEU = "Terrain de l'Église"
 
 # --- Dossier uploads ---

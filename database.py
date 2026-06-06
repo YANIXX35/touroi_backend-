@@ -2,13 +2,43 @@ import os
 import bcrypt
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from config import ADMIN_USERNAME, ADMIN_PASSWORD
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
+# ─── Connection pool (réutilise les connexions au lieu d'en ouvrir une par requête) ──
+_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+
+
+def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=2,
+            maxconn=20,
+            dsn=DATABASE_URL,
+        )
+    return _pool
+
 
 def get_db():
-    conn = psycopg2.connect(DATABASE_URL)
+    """
+    Retourne une connexion tirée du pool.
+    conn.close() la remet dans le pool au lieu de la fermer vraiment.
+    """
+    pool = _get_pool()
+    conn = pool.getconn()
+
+    def _return_to_pool():
+        try:
+            if not conn.closed:
+                conn.rollback()
+        except Exception:
+            pass
+        pool.putconn(conn)
+
+    conn.close = _return_to_pool
     return conn
 
 
@@ -40,9 +70,7 @@ def init_db():
             photo_path TEXT
         )
     """)
-    cur.execute("""
-        ALTER TABLE players ADD COLUMN IF NOT EXISTS photo_path TEXT
-    """)
+    cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS photo_path TEXT")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS matches (
@@ -83,4 +111,4 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-    print("Base de données PostgreSQL initialisée.")
+    print("Base de donnees PostgreSQL initialisee.")
