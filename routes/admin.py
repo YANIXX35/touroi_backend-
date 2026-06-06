@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from database import get_db
+from database import get_db, get_cursor
 from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS
 import bcrypt
 import jwt
@@ -34,9 +34,10 @@ def login():
     password = data.get("password", "")
 
     conn = get_db()
-    admin = conn.execute(
-        "SELECT * FROM admins WHERE username = ?", (username,)
-    ).fetchone()
+    cur = get_cursor(conn)
+    cur.execute("SELECT * FROM admins WHERE username = %s", (username,))
+    admin = cur.fetchone()
+    cur.close()
     conn.close()
 
     if not admin or not bcrypt.checkpw(password.encode("utf-8"), admin["password_hash"].encode("utf-8")):
@@ -59,17 +60,21 @@ def login():
 @token_required
 def admin_get_teams():
     conn = get_db()
-    teams = conn.execute(
-        "SELECT * FROM teams ORDER BY created_at DESC"
-    ).fetchall()
+    cur = get_cursor(conn)
+
+    cur.execute("SELECT * FROM teams ORDER BY created_at DESC")
+    teams = cur.fetchall()
 
     result = []
     for t in teams:
-        players = conn.execute(
-            "SELECT * FROM players WHERE team_id = ?", (t["id"],)
-        ).fetchall()
-        result.append({**dict(t), "players": [dict(p) for p in players]})
+        cur.execute("SELECT * FROM players WHERE team_id = %s", (t["id"],))
+        players = cur.fetchall()
+        row = dict(t)
+        row["created_at"] = str(row["created_at"]) if row["created_at"] else None
+        row["players"] = [dict(p) for p in players]
+        result.append(row)
 
+    cur.close()
     conn.close()
     return jsonify(result)
 
@@ -81,10 +86,13 @@ def admin_update_team(team_id):
     validated = data.get("validated")
 
     conn = get_db()
-    conn.execute(
-        "UPDATE teams SET validated = ? WHERE id = ?", (1 if validated else 0, team_id)
+    cur = get_cursor(conn)
+    cur.execute(
+        "UPDATE teams SET validated = %s WHERE id = %s",
+        (1 if validated else 0, team_id)
     )
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"message": "Équipe mise à jour"})
 
@@ -93,8 +101,10 @@ def admin_update_team(team_id):
 @token_required
 def admin_delete_team(team_id):
     conn = get_db()
-    conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
+    cur = get_cursor(conn)
+    cur.execute("DELETE FROM teams WHERE id = %s", (team_id,))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"message": "Équipe supprimée"})
 
@@ -107,10 +117,12 @@ def admin_create_match():
     data = request.get_json()
 
     conn = get_db()
-    cursor = conn.execute(
+    cur = get_cursor(conn)
+    cur.execute(
         """INSERT INTO matches
            (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'upcoming')""",
+           VALUES (%s, %s, %s, %s, %s, %s, %s, 'upcoming')
+           RETURNING id""",
         (
             data.get("team1_id"),
             data.get("team2_id"),
@@ -121,8 +133,9 @@ def admin_create_match():
             data.get("phase", "Poule"),
         ),
     )
-    match_id = cursor.lastrowid
+    match_id = cur.fetchone()["id"]
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"message": "Match créé", "id": match_id}), 201
 
@@ -138,7 +151,7 @@ def admin_update_match(match_id):
     for field in ["team1_id", "team2_id", "team1_name", "team2_name",
                   "match_date", "match_time", "phase", "score1", "score2", "status"]:
         if field in data:
-            fields.append(f"{field} = ?")
+            fields.append(f"{field} = %s")
             values.append(data[field])
 
     if not fields:
@@ -146,8 +159,10 @@ def admin_update_match(match_id):
 
     values.append(match_id)
     conn = get_db()
-    conn.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = ?", values)
+    cur = get_cursor(conn)
+    cur.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", values)
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"message": "Match mis à jour"})
 
@@ -156,7 +171,9 @@ def admin_update_match(match_id):
 @token_required
 def admin_delete_match(match_id):
     conn = get_db()
-    conn.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+    cur = get_cursor(conn)
+    cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"message": "Match supprimé"})

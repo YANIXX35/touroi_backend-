@@ -7,6 +7,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
     envVars:
+      - key: DATABASE_URL
+        sync: false
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: ADMIN_USERNAME

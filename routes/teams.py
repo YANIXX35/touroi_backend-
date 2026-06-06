@@ -1,6 +1,6 @@
 import os
 from flask import Blueprint, request, jsonify
-from database import get_db
+from database import get_db, get_cursor
 from email_service import send_registration_email
 from config import UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
 from PIL import Image
@@ -16,25 +16,26 @@ def allowed_file(filename):
 @teams_bp.route("/api/teams", methods=["GET"])
 def get_teams():
     conn = get_db()
-    teams = conn.execute(
-        "SELECT * FROM teams WHERE validated = 1 ORDER BY name"
-    ).fetchall()
+    cur = get_cursor(conn)
+
+    cur.execute("SELECT * FROM teams WHERE validated = 1 ORDER BY name")
+    teams = cur.fetchall()
 
     result = []
     for t in teams:
-        players = conn.execute(
-            "SELECT player_name FROM players WHERE team_id = ?", (t["id"],)
-        ).fetchall()
+        cur.execute("SELECT player_name FROM players WHERE team_id = %s", (t["id"],))
+        players = cur.fetchall()
         result.append({
             "id": t["id"],
             "name": t["name"],
             "captain_name": t["captain_name"],
             "phone": t["phone"],
             "logo_path": t["logo_path"],
-            "created_at": t["created_at"],
+            "created_at": str(t["created_at"]) if t["created_at"] else None,
             "players": [p["player_name"] for p in players],
         })
 
+    cur.close()
     conn.close()
     return jsonify(result)
 
@@ -42,23 +43,26 @@ def get_teams():
 @teams_bp.route("/api/teams/<int:team_id>", methods=["GET"])
 def get_team(team_id):
     conn = get_db()
-    team = conn.execute(
-        "SELECT * FROM teams WHERE id = ? AND validated = 1", (team_id,)
-    ).fetchone()
+    cur = get_cursor(conn)
+
+    cur.execute("SELECT * FROM teams WHERE id = %s AND validated = 1", (team_id,))
+    team = cur.fetchone()
 
     if not team:
+        cur.close()
         conn.close()
         return jsonify({"error": "Équipe non trouvée"}), 404
 
-    players = conn.execute(
-        "SELECT player_name FROM players WHERE team_id = ?", (team_id,)
-    ).fetchall()
+    cur.execute("SELECT player_name FROM players WHERE team_id = %s", (team_id,))
+    players = cur.fetchall()
 
+    result = dict(team)
+    result["created_at"] = str(result["created_at"]) if result["created_at"] else None
+    result["players"] = [p["player_name"] for p in players]
+
+    cur.close()
     conn.close()
-    return jsonify({
-        **dict(team),
-        "players": [p["player_name"] for p in players],
-    })
+    return jsonify(result)
 
 
 @teams_bp.route("/api/register", methods=["POST"])
@@ -81,36 +85,38 @@ def register_team():
         return jsonify({"error": "Ajoutez au moins un joueur"}), 400
 
     conn = get_db()
+    cur = get_cursor(conn)
 
-    existing = conn.execute(
-        "SELECT id FROM teams WHERE name = ?", (name,)
-    ).fetchone()
-    if existing:
+    cur.execute("SELECT id FROM teams WHERE name = %s", (name,))
+    if cur.fetchone():
+        cur.close()
         conn.close()
         return jsonify({"error": "Ce nom d'équipe est déjà pris"}), 409
 
-    cursor = conn.execute(
-        "INSERT INTO teams (name, captain_name, phone, logo_path) VALUES (?, ?, ?, ?)",
+    cur.execute(
+        "INSERT INTO teams (name, captain_name, phone, logo_path) VALUES (%s, %s, %s, %s) RETURNING id",
         (name, captain_name, phone, logo_path),
     )
-    team_id = cursor.lastrowid
+    team_id = cur.fetchone()["id"]
 
     for player_name in players:
         name_clean = player_name.strip() if isinstance(player_name, str) else player_name.get("player_name", "").strip()
         if name_clean:
-            conn.execute(
-                "INSERT INTO players (team_id, player_name) VALUES (?, ?)",
+            cur.execute(
+                "INSERT INTO players (team_id, player_name) VALUES (%s, %s)",
                 (team_id, name_clean),
             )
 
     conn.commit()
 
-    team_row = conn.execute(
-        "SELECT * FROM teams WHERE id = ?", (team_id,)
-    ).fetchone()
+    cur.execute("SELECT * FROM teams WHERE id = %s", (team_id,))
+    team_row = dict(cur.fetchone())
+    team_row["created_at"] = str(team_row["created_at"]) if team_row["created_at"] else None
+
+    cur.close()
     conn.close()
 
-    send_registration_email(dict(team_row), players)
+    send_registration_email(team_row, players)
 
     return jsonify({"message": "Inscription réussie ! En attente de validation.", "team_id": team_id}), 201
 

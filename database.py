@@ -1,44 +1,50 @@
-import sqlite3
 import os
 import bcrypt
+import psycopg2
+import psycopg2.extras
 from config import ADMIN_USERNAME, ADMIN_PASSWORD
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "tournoi.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+    conn = psycopg2.connect(DATABASE_URL)
     return conn
+
+
+def get_cursor(conn):
+    return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 
 def init_db():
     conn = get_db()
-    cursor = conn.cursor()
+    cur = get_cursor(conn)
 
-    cursor.executescript("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS teams (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             captain_name TEXT NOT NULL,
             phone TEXT NOT NULL,
             logo_path TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
+            created_at TIMESTAMP DEFAULT NOW(),
             validated INTEGER DEFAULT 0
-        );
+        )
+    """)
 
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS players (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            team_id INTEGER NOT NULL,
-            player_name TEXT NOT NULL,
-            FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
-        );
+            id SERIAL PRIMARY KEY,
+            team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+            player_name TEXT NOT NULL
+        )
+    """)
 
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS matches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            team1_id INTEGER,
-            team2_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            team1_id INTEGER REFERENCES teams(id),
+            team2_id INTEGER REFERENCES teams(id),
             team1_name TEXT,
             team2_name TEXT,
             match_date TEXT,
@@ -46,32 +52,31 @@ def init_db():
             phase TEXT DEFAULT 'Poule',
             score1 INTEGER DEFAULT NULL,
             score2 INTEGER DEFAULT NULL,
-            status TEXT DEFAULT 'upcoming',
-            FOREIGN KEY (team1_id) REFERENCES teams(id),
-            FOREIGN KEY (team2_id) REFERENCES teams(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL
-        );
+            status TEXT DEFAULT 'upcoming'
+        )
     """)
 
-    # Créer l'admin par défaut s'il n'existe pas
-    existing = cursor.execute(
-        "SELECT id FROM admins WHERE username = ?", (ADMIN_USERNAME,)
-    ).fetchone()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admins (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL
+        )
+    """)
+
+    cur.execute("SELECT id FROM admins WHERE username = %s", (ADMIN_USERNAME,))
+    existing = cur.fetchone()
 
     if not existing:
         password_hash = bcrypt.hashpw(
             ADMIN_PASSWORD.encode("utf-8"), bcrypt.gensalt()
         ).decode("utf-8")
-        cursor.execute(
-            "INSERT INTO admins (username, password_hash) VALUES (?, ?)",
+        cur.execute(
+            "INSERT INTO admins (username, password_hash) VALUES (%s, %s)",
             (ADMIN_USERNAME, password_hash),
         )
 
     conn.commit()
+    cur.close()
     conn.close()
-    print("Base de données initialisée.")
+    print("Base de données PostgreSQL initialisée.")
