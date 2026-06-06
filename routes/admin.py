@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from functools import wraps
 from threading import Lock
 import os
+import io
+import base64
 import uuid
 
 admin_bp = Blueprint("admin", __name__)
@@ -343,13 +345,13 @@ def admin_upload_photo():
         if not file.filename or not _allowed_photo(file.filename):
             return jsonify({"error": "Format non autorisé (jpg, png, webp)"}), 400
         from PIL import Image
-        ext = file.filename.rsplit(".", 1)[1].lower()
-        filename = f"player_{uuid.uuid4().hex}.{ext}"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
         img = Image.open(file)
         img.thumbnail(MAX_PHOTO_SIZE)
-        img.save(filepath)
-        return jsonify({"photo_path": filename}), 201
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=82, optimize=True)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+        return jsonify({"photo_path": data_url}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500

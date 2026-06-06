@@ -1,4 +1,6 @@
 import os
+import io
+import base64
 from flask import Blueprint, request, jsonify
 from database import get_db, get_cursor
 from email_service import send_registration_email
@@ -183,20 +185,16 @@ def upload_logo():
     try:
         if "logo" not in request.files:
             return jsonify({"error": "Aucun fichier envoyé"}), 400
-
         file = request.files["logo"]
         if file.filename == "" or not allowed_file(file.filename):
             return jsonify({"error": "Format non autorisé (jpg, png, webp)"}), 400
-
-        ext = file.filename.rsplit(".", 1)[1].lower()
-        filename = f"logo_{uuid.uuid4().hex}.{ext}"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-
-        os.makedirs(UPLOAD_FOLDER, exist_ok=True)
         img = Image.open(file)
         img.thumbnail(MAX_PHOTO_SIZE)
-        img.save(filepath)
-
-        return jsonify({"logo_path": filename}), 201
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=82, optimize=True)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+        return jsonify({"logo_path": data_url}), 201
     except Exception as e:
         return jsonify({"error": f"Erreur upload : {str(e)}"}), 500
