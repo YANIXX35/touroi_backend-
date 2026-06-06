@@ -96,6 +96,14 @@ def init_db():
         )
     """)
 
+    # Index pour accelerer les requetes frequentes
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_teams_validated ON teams(validated)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_players_team_id ON players(team_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_teams_phone ON teams(phone)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_teams_name ON teams(name)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_phase ON matches(phase)")
+
     cur.execute("SELECT id FROM admins WHERE username = %s", (ADMIN_USERNAME,))
     existing = cur.fetchone()
 

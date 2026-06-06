@@ -1,11 +1,15 @@
 from flask import Blueprint, jsonify
 from database import get_db, get_cursor
+from cache import get as cache_get, set as cache_set
 
 matches_bp = Blueprint("matches", __name__)
 
 
 @matches_bp.route("/api/matches", methods=["GET"])
 def get_matches():
+    cached = cache_get("matches_list")
+    if cached is not None:
+        return jsonify(cached)
     try:
         conn = get_db()
         cur = get_cursor(conn)
@@ -13,13 +17,18 @@ def get_matches():
         matches = cur.fetchall()
         cur.close()
         conn.close()
-        return jsonify([dict(m) for m in matches])
+        result = [dict(m) for m in matches]
+        cache_set("matches_list", result, ttl_seconds=30)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @matches_bp.route("/api/results", methods=["GET"])
 def get_results():
+    cached = cache_get("results")
+    if cached is not None:
+        return jsonify(cached)
     try:
         conn = get_db()
         cur = get_cursor(conn)
@@ -70,9 +79,11 @@ def get_results():
 
         cur.close()
         conn.close()
-        return jsonify({
+        result = {
             "finished_matches": [dict(m) for m in finished],
             "standings": ranking,
-        })
+        }
+        cache_set("results", result, ttl_seconds=30)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

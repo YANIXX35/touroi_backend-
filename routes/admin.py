@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from database import get_db, get_cursor
 from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS
+from cache import invalidate as cache_invalidate
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
@@ -170,6 +171,7 @@ def admin_update_team(team_id):
     conn.commit()
     cur.close()
     conn.close()
+    cache_invalidate("teams_list")
     return jsonify({"message": "Équipe mise à jour"})
 
 
@@ -182,6 +184,7 @@ def admin_delete_team(team_id):
     conn.commit()
     cur.close()
     conn.close()
+    cache_invalidate("teams_list")
     return jsonify({"message": "Équipe supprimée"})
 
 
@@ -213,6 +216,8 @@ def admin_create_match():
     conn.commit()
     cur.close()
     conn.close()
+    cache_invalidate("matches_list")
+    cache_invalidate("results")
     return jsonify({"message": "Match créé", "id": match_id}), 201
 
 
@@ -240,6 +245,8 @@ def admin_update_match(match_id):
     conn.commit()
     cur.close()
     conn.close()
+    cache_invalidate("matches_list")
+    cache_invalidate("results")
     return jsonify({"message": "Match mis à jour"})
 
 
@@ -252,4 +259,6 @@ def admin_delete_match(match_id):
     conn.commit()
     cur.close()
     conn.close()
+    cache_invalidate("matches_list")
+    cache_invalidate("results")
     return jsonify({"message": "Match supprimé"})

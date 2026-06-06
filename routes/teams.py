@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from database import get_db, get_cursor
 from email_service import send_registration_email
 from config import UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
+from cache import get as cache_get, set as cache_set, invalidate as cache_invalidate
 from PIL import Image
 import uuid
 
@@ -15,6 +16,9 @@ def allowed_file(filename):
 
 @teams_bp.route("/api/teams", methods=["GET"])
 def get_teams():
+    cached = cache_get("teams_list")
+    if cached is not None:
+        return jsonify(cached)
     try:
         conn = get_db()
         cur = get_cursor(conn)
@@ -45,7 +49,9 @@ def get_teams():
                 }
             if row["player_name"]:
                 teams_map[tid]["players"].append(row["player_name"])
-        return jsonify(list(teams_map.values()))
+        result = list(teams_map.values())
+        cache_set("teams_list", result, ttl_seconds=60)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -140,6 +146,7 @@ def register_team():
                 )
 
         conn.commit()
+        cache_invalidate("teams_list")  # on vient d'ajouter une equipe, invalider le cache
 
         cur.execute("SELECT * FROM teams WHERE id = %s", (team_id,))
         team_row = dict(cur.fetchone())
