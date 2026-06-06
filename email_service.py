@@ -4,6 +4,19 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from config import GMAIL_ADDRESS, GMAIL_APP_PASSWORD, RESPONSABLES_EMAILS, TOURNOI_NOM
 
+_PLACEHOLDER_ADDR = "votre.email@gmail.com"
+_PLACEHOLDER_PWD  = "xxxx xxxx xxxx xxxx"
+
+
+def is_email_configured() -> bool:
+    return (
+        GMAIL_ADDRESS != _PLACEHOLDER_ADDR
+        and GMAIL_APP_PASSWORD != _PLACEHOLDER_PWD
+        and bool(GMAIL_ADDRESS)
+        and bool(GMAIL_APP_PASSWORD)
+        and bool(RESPONSABLES_EMAILS)
+    )
+
 
 def _player_name(p) -> str:
     if isinstance(p, dict):
@@ -44,6 +57,10 @@ def send_registration_email(team_data: dict, players: list):
     </body></html>
     """
 
+    if not is_email_configured():
+        print("[EMAIL] Credentials non configurés — email ignoré. Définissez GMAIL_ADDRESS, GMAIL_APP_PASSWORD et RESPONSABLES_EMAILS dans les variables d'environnement Render.")
+        return False
+
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
@@ -55,8 +72,8 @@ def send_registration_email(team_data: dict, players: list):
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
             server.sendmail(GMAIL_ADDRESS, RESPONSABLES_EMAILS, msg.as_string())
 
-        print(f"Email envoyé pour l'équipe {team_data.get('name', '')}")
+        print(f"[EMAIL] Envoyé pour l'équipe {team_data.get('name', '')}")
         return True
     except Exception as e:
-        print(f"Erreur envoi email : {e}")
+        print(f"[EMAIL] Erreur envoi : {e}")
         return False

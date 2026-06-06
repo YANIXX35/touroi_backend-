@@ -79,6 +79,24 @@ def token_required(f):
 
 # ─── Authentification ──────────────────────────────────────────────────────
 
+@admin_bp.route("/api/admin/refresh", methods=["POST"])
+@token_required
+def refresh_token():
+    """Émet un nouveau token si l'actuel est encore valide."""
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+        username = payload.get("sub", "")
+        new_token = jwt.encode(
+            {"sub": username, "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)},
+            JWT_SECRET_KEY,
+            algorithm="HS256",
+        )
+        return jsonify({"token": new_token})
+    except Exception:
+        return jsonify({"error": "Token invalide"}), 401
+
+
 @admin_bp.route("/api/admin/login", methods=["POST"])
 def login():
     ip = request.remote_addr or "unknown"
@@ -198,9 +216,29 @@ def admin_delete_team(team_id):
 @token_required
 def admin_create_match():
     data = request.get_json()
+    t1 = (data.get("team1_name") or "").strip()
+    t2 = (data.get("team2_name") or "").strip()
+    match_date = (data.get("match_date") or "").strip()
+    match_time = (data.get("match_time") or "").strip()
+
+    if not t1 or not t2:
+        return jsonify({"error": "Les noms des deux équipes sont requis"}), 400
 
     conn = get_db()
     cur = get_cursor(conn)
+
+    # Protection doublon : même équipes + même date + même heure
+    cur.execute(
+        """SELECT id FROM matches
+           WHERE LOWER(team1_name) = LOWER(%s) AND LOWER(team2_name) = LOWER(%s)
+             AND match_date = %s AND match_time = %s""",
+        (t1, t2, match_date, match_time),
+    )
+    if cur.fetchone():
+        cur.close()
+        conn.close()
+        return jsonify({"error": "Ce match existe déjà (mêmes équipes, même date et heure)"}), 409
+
     cur.execute(
         """INSERT INTO matches
            (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status)
@@ -209,10 +247,10 @@ def admin_create_match():
         (
             data.get("team1_id"),
             data.get("team2_id"),
-            data.get("team1_name", ""),
-            data.get("team2_name", ""),
-            data.get("match_date", ""),
-            data.get("match_time", ""),
+            t1,
+            t2,
+            match_date,
+            match_time,
             data.get("phase", "Poule"),
         ),
     )

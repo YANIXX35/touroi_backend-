@@ -2,7 +2,7 @@ import os
 
 # --- Clé secrète JWT (lire depuis variable d'environnement en prod) ---
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "tournoi-eglise-secret-key-2024-secure!")
-JWT_EXPIRATION_HOURS = int(os.environ.get("JWT_EXPIRATION_HOURS", "8"))
+JWT_EXPIRATION_HOURS = int(os.environ.get("JWT_EXPIRATION_HOURS", "24"))
 
 # --- Gmail SMTP ---
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "votre.email@gmail.com")
