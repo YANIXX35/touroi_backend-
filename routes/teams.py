@@ -90,6 +90,10 @@ def register_team():
         if cur.fetchone():
             return jsonify({"error": "Ce nom d'équipe est déjà pris"}), 409
 
+        cur.execute("SELECT id FROM teams WHERE phone = %s", (phone,))
+        if cur.fetchone():
+            return jsonify({"error": "Ce numéro de téléphone est déjà utilisé pour une inscription. Chaque équipe doit avoir un numéro unique."}), 409
+
         cur.execute(
             "INSERT INTO teams (name, captain_name, phone, logo_path) VALUES (%s, %s, %s, %s) RETURNING id",
             (name, captain_name, phone, logo_path),
