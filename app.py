@@ -9,12 +9,21 @@ from config import UPLOAD_FOLDER, FRONTEND_URL
 
 app = Flask(__name__)
 
-# CORS : autoriser localhost en dev + l'URL Vercel en prod
-_allowed_origins = ["http://localhost:4200"]
-if FRONTEND_URL:
-    _allowed_origins.append(FRONTEND_URL)
+# Origines autorisées — Vercel hardcodé pour garantir le CORS même si FRONTEND_URL n'est pas défini
+_allowed_origins = [
+    "http://localhost:4200",
+    "https://tournoi-front.vercel.app",
+]
+if FRONTEND_URL and FRONTEND_URL.strip() not in _allowed_origins:
+    _allowed_origins.append(FRONTEND_URL.strip())
 
-CORS(app, resources={r"/api/*": {"origins": _allowed_origins}})
+CORS(
+    app,
+    resources={r"/api/*": {"origins": _allowed_origins}},
+    supports_credentials=False,
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 Mo max
