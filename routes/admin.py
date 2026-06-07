@@ -393,3 +393,80 @@ def admin_upload_photo():
         return jsonify({"photo_path": data_url}), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Buteurs & Passeurs ────────────────────────────────────────────────────
+
+@admin_bp.route("/api/admin/matches/<int:match_id>/goals", methods=["GET"])
+@token_required
+def get_match_goals(match_id):
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("SELECT * FROM goals WHERE match_id = %s ORDER BY minute NULLS LAST, id", (match_id,))
+    goals = [dict(g) for g in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return jsonify(goals)
+
+
+@admin_bp.route("/api/admin/matches/<int:match_id>/goals", methods=["POST"])
+@token_required
+def add_goal(match_id):
+    data = request.get_json() or {}
+    player_name = (data.get("player_name") or "").strip()
+    team_name   = (data.get("team_name") or "").strip()
+    type_       = data.get("type", "goal")
+    minute      = data.get("minute") or None
+    if not player_name or not team_name:
+        return jsonify({"error": "Nom du joueur et équipe requis"}), 400
+    if type_ not in ("goal", "assist"):
+        return jsonify({"error": "Type invalide (goal ou assist)"}), 400
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO goals (match_id, player_name, team_name, type, minute) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+        (match_id, player_name, team_name, type_, minute),
+    )
+    goal_id = cur.fetchone()["id"]
+    conn.commit()
+    cur.close()
+    conn.close()
+    cache_invalidate("top_scorers")
+    return jsonify({"id": goal_id, "match_id": match_id, "player_name": player_name,
+                    "team_name": team_name, "type": type_, "minute": minute}), 201
+
+
+@admin_bp.route("/api/admin/goals/<int:goal_id>", methods=["PUT"])
+@token_required
+def update_goal(goal_id):
+    data = request.get_json() or {}
+    player_name = (data.get("player_name") or "").strip()
+    team_name   = (data.get("team_name") or "").strip()
+    type_       = data.get("type", "goal")
+    minute      = data.get("minute") or None
+    if not player_name or not team_name:
+        return jsonify({"error": "Nom du joueur et équipe requis"}), 400
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute(
+        "UPDATE goals SET player_name=%s, team_name=%s, type=%s, minute=%s WHERE id=%s",
+        (player_name, team_name, type_, minute, goal_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    cache_invalidate("top_scorers")
+    return jsonify({"message": "But/Passe mis à jour"})
+
+
+@admin_bp.route("/api/admin/goals/<int:goal_id>", methods=["DELETE"])
+@token_required
+def delete_goal(goal_id):
+    conn = get_db()
+    cur = get_cursor(conn)
+    cur.execute("DELETE FROM goals WHERE id=%s", (goal_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    cache_invalidate("top_scorers")
+    return jsonify({"message": "Supprimé"})

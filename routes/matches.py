@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify
 from database import get_db, get_cursor
-from cache import get as cache_get, set as cache_set
+from cache import get as cache_get, set as cache_set, invalidate as cache_invalidate
 
 matches_bp = Blueprint("matches", __name__)
 
@@ -84,6 +84,48 @@ def get_results():
             "standings": ranking,
         }
         cache_set("results", result, ttl_seconds=30)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@matches_bp.route("/api/goals", methods=["GET"])
+def get_top_scorers():
+    cached = cache_get("top_scorers")
+    if cached is not None:
+        return jsonify(cached)
+    try:
+        conn = get_db()
+        cur = get_cursor(conn)
+
+        # Classement buteurs et passeurs
+        cur.execute("""
+            SELECT player_name, team_name, type, COUNT(*) AS total
+            FROM goals
+            GROUP BY player_name, team_name, type
+            ORDER BY total DESC, player_name
+        """)
+        ranking = [dict(r) for r in cur.fetchall()]
+
+        # Buts détaillés par match (pour affichage public)
+        cur.execute("""
+            SELECT g.id, g.match_id, g.player_name, g.team_name, g.type, g.minute,
+                   m.team1_name, m.team2_name, m.match_date, m.score1, m.score2
+            FROM goals g
+            JOIN matches m ON m.id = g.match_id
+            ORDER BY m.match_date, m.match_time, g.minute
+        """)
+        all_goals = [dict(r) for r in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+
+        result = {
+            "scorers":  [r for r in ranking if r["type"] == "goal"],
+            "assisters": [r for r in ranking if r["type"] == "assist"],
+            "all_goals": all_goals,
+        }
+        cache_set("top_scorers", result, ttl_seconds=30)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

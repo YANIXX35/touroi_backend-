@@ -111,6 +111,18 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS goals (
+            id SERIAL PRIMARY KEY,
+            match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+            player_name TEXT NOT NULL,
+            team_name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'goal',
+            minute INTEGER,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -125,6 +137,8 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_teams_name ON teams(name)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_phase ON matches(phase)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_goals_match_id ON goals(match_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_goals_type ON goals(type)")
 
     cur.execute("SELECT id FROM admins WHERE username = %s", (ADMIN_USERNAME,))
     existing = cur.fetchone()
