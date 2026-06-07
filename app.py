@@ -5,6 +5,7 @@ from database import init_db
 from routes.teams import teams_bp
 from routes.matches import matches_bp
 from routes.admin import admin_bp
+from routes.public import public_bp
 from config import UPLOAD_FOLDER, FRONTEND_URL
 
 app = Flask(__name__)
@@ -31,6 +32,7 @@ app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 Mo max
 app.register_blueprint(teams_bp)
 app.register_blueprint(matches_bp)
 app.register_blueprint(admin_bp)
+app.register_blueprint(public_bp)
 
 # Créer le dossier uploads et initialiser la BDD au démarrage (gunicorn inclus)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)

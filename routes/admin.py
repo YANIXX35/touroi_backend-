@@ -470,3 +470,154 @@ def delete_goal(goal_id):
     conn.close()
     cache_invalidate("top_scorers")
     return jsonify({"message": "Supprimé"})
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────
+
+def _get_username():
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    try:
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"]).get("sub", "admin")
+    except Exception:
+        return "admin"
+
+
+def _log(action: str, details: str = ""):
+    try:
+        username = _get_username()
+        conn = get_db(); cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO admin_logs (username, action, details) VALUES (%s, %s, %s)",
+            (username, action, (details or "")[:500])
+        )
+        conn.commit(); cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+# ─── Galerie (admin) ──────────────────────────────────────────────────────
+
+@admin_bp.route("/api/admin/gallery", methods=["GET"])
+@token_required
+def admin_get_gallery():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT id, title, photo_path, created_at FROM gallery ORDER BY created_at DESC")
+    rows = [{"id": r["id"], "title": r["title"], "photo_path": r["photo_path"],
+             "created_at": str(r["created_at"])} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify(rows)
+
+
+@admin_bp.route("/api/admin/gallery", methods=["POST"])
+@token_required
+def admin_add_photo():
+    data = request.get_json() or {}
+    photo_path = (data.get("photo_path") or "").strip()
+    title = (data.get("title") or "").strip()
+    if not photo_path:
+        return jsonify({"error": "Photo requise"}), 400
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO gallery (title, photo_path) VALUES (%s, %s) RETURNING id, created_at",
+        (title or None, photo_path)
+    )
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    cache_invalidate("gallery")
+    _log("gallery_add", title or "sans titre")
+    return jsonify({"id": row["id"], "title": title, "photo_path": photo_path,
+                    "created_at": str(row["created_at"])}), 201
+
+
+@admin_bp.route("/api/admin/gallery/<int:photo_id>", methods=["DELETE"])
+@token_required
+def admin_delete_photo(photo_id):
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("DELETE FROM gallery WHERE id=%s", (photo_id,))
+    conn.commit(); cur.close(); conn.close()
+    cache_invalidate("gallery")
+    _log("gallery_delete", f"photo #{photo_id}")
+    return jsonify({"message": "Photo supprimée"})
+
+
+# ─── Annonces (admin) ─────────────────────────────────────────────────────
+
+@admin_bp.route("/api/admin/announcements", methods=["GET"])
+@token_required
+def admin_get_announcements():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT id, title, content, type, active, created_at FROM announcements ORDER BY created_at DESC")
+    rows = [{"id": r["id"], "title": r["title"], "content": r["content"],
+             "type": r["type"], "active": r["active"], "created_at": str(r["created_at"])}
+            for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify(rows)
+
+
+@admin_bp.route("/api/admin/announcements", methods=["POST"])
+@token_required
+def admin_add_announcement():
+    data = request.get_json() or {}
+    title = (data.get("title") or "").strip()
+    content = (data.get("content") or "").strip()
+    type_ = data.get("type", "info")
+    if not title or not content:
+        return jsonify({"error": "Titre et contenu requis"}), 400
+    if type_ not in ("info", "warning", "urgent"):
+        type_ = "info"
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute(
+        "INSERT INTO announcements (title, content, type) VALUES (%s, %s, %s) RETURNING id, created_at",
+        (title, content, type_)
+    )
+    row = cur.fetchone()
+    conn.commit(); cur.close(); conn.close()
+    cache_invalidate("announcements")
+    _log("announcement_add", title)
+    return jsonify({"id": row["id"], "title": title, "content": content,
+                    "type": type_, "active": True, "created_at": str(row["created_at"])}), 201
+
+
+@admin_bp.route("/api/admin/announcements/<int:ann_id>", methods=["PUT"])
+@token_required
+def admin_update_announcement(ann_id):
+    data = request.get_json() or {}
+    conn = get_db(); cur = get_cursor(conn)
+    fields, values = [], []
+    for f in ["title", "content", "type"]:
+        if f in data:
+            fields.append(f"{f} = %s"); values.append(data[f])
+    if "active" in data:
+        fields.append("active = %s"); values.append(bool(data["active"]))
+    if not fields:
+        return jsonify({"error": "Rien à modifier"}), 400
+    values.append(ann_id)
+    cur.execute(f"UPDATE announcements SET {', '.join(fields)} WHERE id = %s", values)
+    conn.commit(); cur.close(); conn.close()
+    cache_invalidate("announcements")
+    _log("announcement_update", f"#{ann_id}")
+    return jsonify({"message": "Annonce mise à jour"})
+
+
+@admin_bp.route("/api/admin/announcements/<int:ann_id>", methods=["DELETE"])
+@token_required
+def admin_delete_announcement(ann_id):
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("DELETE FROM announcements WHERE id=%s", (ann_id,))
+    conn.commit(); cur.close(); conn.close()
+    cache_invalidate("announcements")
+    _log("announcement_delete", f"#{ann_id}")
+    return jsonify({"message": "Annonce supprimée"})
+
+
+# ─── Historique admin ─────────────────────────────────────────────────────
+
+@admin_bp.route("/api/admin/logs", methods=["GET"])
+@token_required
+def admin_get_logs():
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("SELECT id, username, action, details, created_at FROM admin_logs ORDER BY created_at DESC LIMIT 200")
+    rows = [{"id": r["id"], "username": r["username"], "action": r["action"],
+             "details": r["details"], "created_at": str(r["created_at"])} for r in cur.fetchall()]
+    cur.close(); conn.close()
+    return jsonify(rows)

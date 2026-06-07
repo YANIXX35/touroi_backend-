@@ -140,6 +140,40 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_goals_match_id ON goals(match_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_goals_type ON goals(type)")
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS gallery (
+            id SERIAL PRIMARY KEY,
+            title TEXT,
+            photo_path TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS announcements (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'info',
+            active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_logs (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            details TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_gallery_created ON gallery(created_at DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(active)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created_at DESC)")
+
     cur.execute("SELECT id FROM admins WHERE username = %s", (ADMIN_USERNAME,))
     existing = cur.fetchone()
 
