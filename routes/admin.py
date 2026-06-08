@@ -529,6 +529,19 @@ def admin_add_photo():
                     "created_at": str(row["created_at"])}), 201
 
 
+@admin_bp.route("/api/admin/gallery/<int:photo_id>", methods=["PATCH"])
+@token_required
+def admin_update_photo(photo_id):
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip() or None
+    conn = get_db(); cur = get_cursor(conn)
+    cur.execute("UPDATE gallery SET title=%s WHERE id=%s", (title, photo_id))
+    conn.commit(); cur.close(); conn.close()
+    cache_invalidate("gallery")
+    _log("gallery_update", f"photo #{photo_id}")
+    return jsonify({"id": photo_id, "title": title})
+
+
 @admin_bp.route("/api/admin/gallery/<int:photo_id>", methods=["DELETE"])
 @token_required
 def admin_delete_photo(photo_id):
