@@ -4,7 +4,8 @@ from flask import Blueprint, request, jsonify
 from database import db_conn, get_cursor
 from email_service import send_registration_email
 from config import ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
-from cache import get as cache_get, set as cache_set, invalidate as cache_invalidate
+from cache import invalidate as cache_invalidate
+import cache as _cache
 from PIL import Image
 
 teams_bp = Blueprint("teams", __name__)
@@ -14,42 +15,48 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+# ─── Fonction de fetch (module-level, réutilisable pour le pré-chauffe) ───────
+
+def _fetch_teams_list():
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("""
+            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
+                   p.player_name
+            FROM teams t
+            LEFT JOIN players p ON p.team_id = t.id
+            WHERE t.validated = 1
+            ORDER BY t.name, p.id
+        """)
+        rows = cur.fetchall()
+        cur.close()
+
+    teams_map: dict = {}
+    for row in rows:
+        tid = row["id"]
+        if tid not in teams_map:
+            teams_map[tid] = {
+                "id": tid,
+                "name": row["name"],
+                "captain_name": row["captain_name"],
+                "phone": row["phone"],
+                "logo_path": row["logo_path"],
+                "created_at": str(row["created_at"]) if row["created_at"] else None,
+                "players": [],
+            }
+        if row["player_name"]:
+            teams_map[tid]["players"].append(row["player_name"])
+    return list(teams_map.values())
+
+
+# ─── Routes ───────────────────────────────────────────────────────────────────
+
 @teams_bp.route("/api/teams", methods=["GET"])
 def get_teams():
-    cached = cache_get("teams_list")
-    if cached is not None:
-        return jsonify(cached)
     try:
-        with db_conn() as conn:
-            cur = get_cursor(conn)
-            cur.execute("""
-                SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
-                       p.player_name
-                FROM teams t
-                LEFT JOIN players p ON p.team_id = t.id
-                WHERE t.validated = 1
-                ORDER BY t.name, p.id
-            """)
-            rows = cur.fetchall()
-            cur.close()
-
-        teams_map: dict = {}
-        for row in rows:
-            tid = row["id"]
-            if tid not in teams_map:
-                teams_map[tid] = {
-                    "id": tid,
-                    "name": row["name"],
-                    "captain_name": row["captain_name"],
-                    "phone": row["phone"],
-                    "logo_path": row["logo_path"],
-                    "created_at": str(row["created_at"]) if row["created_at"] else None,
-                    "players": [],
-                }
-            if row["player_name"]:
-                teams_map[tid]["players"].append(row["player_name"])
-        result = list(teams_map.values())
-        cache_set("teams_list", result, ttl_seconds=300)
+        result = _cache.get_or_compute("teams_list", _fetch_teams_list, ttl_seconds=300)
+        if result is None:
+            return jsonify({"error": "Service temporairement indisponible"}), 503
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -106,6 +106,9 @@ def init_db():
             )
         """)
         cur.execute("ALTER TABLE players ADD COLUMN IF NOT EXISTS photo_path TEXT")
+        # Migrations pour colonnes ajoutées après la création initiale des tables
+        cur.execute("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE")
+        cur.execute("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'info'")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS matches (

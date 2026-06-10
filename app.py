@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import threading
 from flask import Flask, request, send_from_directory
 from flask_cors import CORS
 from flask_compress import Compress
@@ -50,6 +51,31 @@ try:
     init_db()
 except Exception as _e:
     logging.error("DB init echouee au demarrage (sera reessayee a la premiere requete): %s", _e)
+
+
+def _prewarm_cache():
+    """Pré-chauffe les clés de cache critiques au démarrage de chaque worker.
+    Évite le cache stampede : le premier vrai utilisateur ne tape plus jamais
+    dans une base froide avec 50 concurrents derrière lui."""
+    time.sleep(2)   # Laisser gunicorn finir l'initialisation du worker
+    try:
+        import cache as _cache
+        from routes.teams import _fetch_teams_list
+        from routes.matches import _fetch_matches, _fetch_results, _fetch_top_scorers
+        from routes.public import _fetch_gallery, _fetch_announcements
+
+        _cache.get_or_compute("teams_list",  _fetch_teams_list,    ttl_seconds=300)
+        _cache.get_or_compute("matches_list", _fetch_matches,       ttl_seconds=120)
+        _cache.get_or_compute("results",      _fetch_results,       ttl_seconds=120)
+        _cache.get_or_compute("top_scorers",  _fetch_top_scorers,   ttl_seconds=120)
+        _cache.get_or_compute("announcements", _fetch_announcements, ttl_seconds=120)
+        _cache.get_or_compute("gallery",      _fetch_gallery,       ttl_seconds=300)
+        logging.info("Cache pré-chargé avec succès (worker prêt)")
+    except Exception as _e:
+        logging.warning("Pré-chauffe cache échouée (non bloquant): %s", _e)
+
+
+threading.Thread(target=_prewarm_cache, daemon=True).start()
 
 
 @app.before_request
