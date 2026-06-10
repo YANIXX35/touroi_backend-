@@ -1,6 +1,47 @@
-from flask import Blueprint, jsonify, request
+import base64
+import threading
+from flask import Blueprint, jsonify, request, Response
 from database import db_conn, get_cursor
 import cache as _cache
+
+public_bp = Blueprint("public", __name__)
+
+# Cache mémoire pour les photos joueurs — même pattern que les logos d'équipe.
+# Évite 13 requêtes DB × N utilisateurs pour chaque page de détail.
+_player_cache: dict = {}   # {player_id: {"bytes": bytes, "mime": str} | None}
+_player_lock = threading.Lock()
+
+
+def _prewarm_player_photos():
+    """Décode et met en cache toutes les photos joueurs au démarrage du worker."""
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute(
+                "SELECT id, photo_path FROM players "
+                "WHERE photo_path IS NOT NULL AND photo_path != ''"
+            )
+            rows = cur.fetchall()
+            cur.close()
+        for row in rows:
+            pid = row["id"]
+            photo = row["photo_path"]
+            if photo and photo.startswith("data:"):
+                try:
+                    header, b64data = photo.split(",", 1)
+                    mime = header.split(":")[1].split(";")[0]
+                    img_bytes = base64.b64decode(b64data)
+                    with _player_lock:
+                        _player_cache[pid] = {"bytes": img_bytes, "mime": mime}
+                except Exception:
+                    with _player_lock:
+                        _player_cache[pid] = None
+            else:
+                # Chemin fichier legacy : absent sur Render éphémère
+                with _player_lock:
+                    _player_cache[pid] = None
+    except Exception:
+        pass
 
 
 def _strip_photos(data: dict) -> dict:
@@ -9,8 +50,6 @@ def _strip_photos(data: dict) -> dict:
         "logo_path": None,
         "players": [{**p, "photo_path": None} for p in data.get("players", [])],
     }
-
-public_bp = Blueprint("public", __name__)
 
 
 # ─── Fonctions de fetch (module-level, réutilisables pour le pré-chauffe) ─────
@@ -45,8 +84,11 @@ def _fetch_team_detail(team_id: int) -> dict:
         cur = get_cursor(conn)
 
         cur.execute("""
-            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
-                   p.id AS player_id, p.player_name, p.photo_path
+            SELECT t.id, t.name, t.captain_name, t.phone,
+                   t.logo_path IS NOT NULL AND t.logo_path != '' AS has_logo,
+                   t.created_at,
+                   p.id AS player_id, p.player_name,
+                   p.photo_path IS NOT NULL AND p.photo_path != '' AS has_photo
             FROM teams t
             LEFT JOIN players p ON p.team_id = t.id
             WHERE t.id = %s AND t.validated = 1
@@ -58,14 +100,21 @@ def _fetch_team_detail(team_id: int) -> dict:
             raise LookupError("Équipe non trouvée")
 
         first = rows[0]
+        tid = first["id"]
         team = {
-            "id": first["id"],
+            "id": tid,
             "name": first["name"],
             "captain_name": first["captain_name"],
-            "logo_path": first["logo_path"],
+            # URL légère au lieu du base64 — le navigateur charge à la demande
+            "logo_path": f"/api/teams/{tid}/logo" if first["has_logo"] else None,
             "created_at": str(first["created_at"]) if first["created_at"] else None,
             "players": [
-                {"id": r["player_id"], "player_name": r["player_name"], "photo_path": r["photo_path"]}
+                {
+                    "id": r["player_id"],
+                    "player_name": r["player_name"],
+                    # URL au lieu du base64 — photo_path garde le même nom pour la compat frontend
+                    "photo_path": f"/api/players/{r['player_id']}/photo" if r["has_photo"] else None,
+                }
                 for r in rows if r["player_id"]
             ],
         }
@@ -89,9 +138,9 @@ def _fetch_team_detail(team_id: int) -> dict:
             played += 1
             goals_for += gf
             goals_against += ga
-            if gf > ga: won += 1
+            if gf > ga:   won += 1
             elif gf == ga: drawn += 1
-            else: lost += 1
+            else:          lost += 1
 
         cur.execute("""
             SELECT player_name, type, COUNT(*) AS total
@@ -155,3 +204,54 @@ def get_team_detail(team_id):
         return jsonify({"error": str(e)}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@public_bp.route("/api/players/<int:player_id>/photo", methods=["GET"])
+def get_player_photo(player_id):
+    """Sert la photo d'un joueur depuis le cache mémoire (0 DB après warmup)."""
+    # Chemin rapide : cache mémoire
+    with _player_lock:
+        if player_id in _player_cache:
+            entry = _player_cache[player_id]
+            if entry is None:
+                return "", 404
+            resp = Response(entry["bytes"], mimetype=entry["mime"])
+            resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+            return resp
+
+    # Premier accès : charger depuis la DB
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("SELECT photo_path FROM players WHERE id = %s", (player_id,))
+            row = cur.fetchone()
+            cur.close()
+    except Exception:
+        return "", 503
+
+    if not row or not row["photo_path"]:
+        with _player_lock:
+            _player_cache[player_id] = None
+        return "", 404
+
+    photo = row["photo_path"]
+    if not photo.startswith("data:"):
+        # Legacy fichier : absent sur Render éphémère
+        with _player_lock:
+            _player_cache[player_id] = None
+        return "", 404
+
+    try:
+        header, b64data = photo.split(",", 1)
+        mime = header.split(":")[1].split(";")[0]
+        img_bytes = base64.b64decode(b64data)
+        entry = {"bytes": img_bytes, "mime": mime}
+        with _player_lock:
+            _player_cache[player_id] = entry
+        resp = Response(img_bytes, mimetype=mime)
+        resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        return resp
+    except Exception:
+        with _player_lock:
+            _player_cache[player_id] = None
+        return "", 500

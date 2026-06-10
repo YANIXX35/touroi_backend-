@@ -62,7 +62,7 @@ def _prewarm_cache():
         import cache as _cache
         from routes.teams import _fetch_teams_list, _prewarm_logos
         from routes.matches import _fetch_matches, _fetch_results, _fetch_top_scorers
-        from routes.public import _fetch_gallery, _fetch_announcements
+        from routes.public import _fetch_gallery, _fetch_announcements, _prewarm_player_photos
 
         # Utilise set() directement pour ne pas interférer avec le mécanisme
         # inflight des routes : le pre-warmer peuple le cache sans bloquer
@@ -73,8 +73,9 @@ def _prewarm_cache():
         _cache.set("top_scorers",  _fetch_top_scorers(),   ttl_seconds=120)
         _cache.set("announcements", _fetch_announcements(), ttl_seconds=120)
         _cache.set("gallery",      _fetch_gallery(),       ttl_seconds=300)
-        # Décode et cache tous les logos en mémoire — zéro DB pour les images
+        # Décode et cache tous les logos et photos en mémoire — zéro DB pour les images
         _prewarm_logos()
+        _prewarm_player_photos()
         logging.info("Cache pré-chargé avec succès (worker prêt)")
     except Exception as _e:
         logging.warning("Pré-chauffe cache échouée (non bloquant): %s", _e)
