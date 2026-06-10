@@ -52,7 +52,7 @@ def get_teams():
             if row["player_name"]:
                 teams_map[tid]["players"].append(row["player_name"])
         result = list(teams_map.values())
-        cache_set("teams_list", result, ttl_seconds=60)
+        cache_set("teams_list", result, ttl_seconds=300)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

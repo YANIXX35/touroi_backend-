@@ -1,6 +1,7 @@
 import os
-from flask import Flask, send_from_directory
+from flask import Flask, request, send_from_directory
 from flask_cors import CORS
+from flask_compress import Compress
 from database import init_db
 from routes.teams import teams_bp
 from routes.matches import matches_bp
@@ -9,6 +10,16 @@ from routes.public import public_bp
 from config import UPLOAD_FOLDER, FRONTEND_URL
 
 app = Flask(__name__)
+
+# Gzip compression — divides response size by 5-10x (critical for base64 photo payloads)
+app.config["COMPRESS_MIMETYPES"] = [
+    "application/json",
+    "text/html",
+    "text/plain",
+]
+app.config["COMPRESS_LEVEL"] = 6
+app.config["COMPRESS_MIN_SIZE"] = 500
+Compress(app)
 
 # Origines autorisées — Vercel hardcodé pour garantir le CORS même si FRONTEND_URL n'est pas défini
 _allowed_origins = [
@@ -23,7 +34,7 @@ CORS(
     resources={r"/api/*": {"origins": _allowed_origins}},
     supports_credentials=False,
     allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -37,6 +48,17 @@ app.register_blueprint(public_bp)
 # Créer le dossier uploads et initialiser la BDD au démarrage (gunicorn inclus)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 init_db()
+
+
+@app.after_request
+def add_cache_headers(response):
+    """Browser caching for public GET endpoints — reduces repeat requests to near zero."""
+    if request.method == "GET" and response.status_code == 200:
+        if not request.path.startswith("/api/admin"):
+            response.headers["Cache-Control"] = "public, max-age=60"
+        else:
+            response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/uploads/<string:filename>")

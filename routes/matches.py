@@ -18,7 +18,7 @@ def get_matches():
         cur.close()
         conn.close()
         result = [dict(m) for m in matches]
-        cache_set("matches_list", result, ttl_seconds=30)
+        cache_set("matches_list", result, ttl_seconds=120)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -83,7 +83,7 @@ def get_results():
             "finished_matches": [dict(m) for m in finished],
             "standings": ranking,
         }
-        cache_set("results", result, ttl_seconds=30)
+        cache_set("results", result, ttl_seconds=120)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -125,7 +125,7 @@ def get_top_scorers():
             "assisters": [r for r in ranking if r["type"] == "assist"],
             "all_goals": all_goals,
         }
-        cache_set("top_scorers", result, ttl_seconds=30)
+        cache_set("top_scorers", result, ttl_seconds=120)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500

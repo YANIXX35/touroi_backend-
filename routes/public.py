@@ -19,7 +19,7 @@ def get_gallery():
         rows = [{"id": r["id"], "title": r["title"], "photo_path": r["photo_path"],
                  "created_at": str(r["created_at"])} for r in cur.fetchall()]
         cur.close(); conn.close()
-        cache_set("gallery", rows, ttl_seconds=60)
+        cache_set("gallery", rows, ttl_seconds=300)
         return jsonify(rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -44,7 +44,7 @@ def get_announcements():
         rows = [{"id": r["id"], "title": r["title"], "content": r["content"],
                  "type": r["type"], "created_at": str(r["created_at"])} for r in cur.fetchall()]
         cur.close(); conn.close()
-        cache_set("announcements", rows, ttl_seconds=30)
+        cache_set("announcements", rows, ttl_seconds=120)
         return jsonify(rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
