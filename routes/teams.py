@@ -193,8 +193,8 @@ def upload_logo():
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=82, optimize=True)
-        data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
+        img.save(buf, format="WEBP", quality=65)
+        data_url = "data:image/webp;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
         return jsonify({"logo_path": data_url}), 201
     except Exception as e:
         return jsonify({"error": f"Erreur upload : {str(e)}"}), 500
