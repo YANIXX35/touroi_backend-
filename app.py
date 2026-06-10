@@ -103,10 +103,12 @@ def _log_perf(response):
 @app.after_request
 def add_cache_headers(response):
     if request.method == "GET" and response.status_code == 200:
-        if not request.path.startswith("/api/admin"):
-            response.headers["Cache-Control"] = "public, max-age=60"
-        else:
-            response.headers["Cache-Control"] = "no-store"
+        # Don't overwrite Cache-Control already set by the route (e.g. logo endpoint)
+        if "Cache-Control" not in response.headers:
+            if not request.path.startswith("/api/admin"):
+                response.headers["Cache-Control"] = "public, max-age=60"
+            else:
+                response.headers["Cache-Control"] = "no-store"
     return response
 
 

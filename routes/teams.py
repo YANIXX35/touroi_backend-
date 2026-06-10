@@ -1,9 +1,9 @@
 import io
 import base64
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response, send_from_directory
 from database import db_conn, get_cursor
 from email_service import send_registration_email
-from config import ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
+from config import ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE, UPLOAD_FOLDER
 from cache import invalidate as cache_invalidate
 import cache as _cache
 from PIL import Image
@@ -15,13 +15,15 @@ def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-# ─── Fonction de fetch (module-level, réutilisable pour le pré-chauffe) ───────
+# ─── Fetch (module-level, réutilisable pour le pré-chauffe) ──────────────────
 
 def _fetch_teams_list():
     with db_conn() as conn:
         cur = get_cursor(conn)
         cur.execute("""
-            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
+            SELECT t.id, t.name, t.captain_name, t.phone,
+                   t.logo_path IS NOT NULL AND t.logo_path != '' AS has_logo,
+                   t.created_at,
                    p.player_name
             FROM teams t
             LEFT JOIN players p ON p.team_id = t.id
@@ -40,7 +42,8 @@ def _fetch_teams_list():
                 "name": row["name"],
                 "captain_name": row["captain_name"],
                 "phone": row["phone"],
-                "logo_path": row["logo_path"],
+                # URL légère au lieu du base64 — le navigateur charge l'image à la demande
+                "logo_path": f"/api/teams/{tid}/logo" if row["has_logo"] else None,
                 "created_at": str(row["created_at"]) if row["created_at"] else None,
                 "players": [],
             }
@@ -49,7 +52,7 @@ def _fetch_teams_list():
     return list(teams_map.values())
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# ─── Routes publiques ─────────────────────────────────────────────────────────
 
 @teams_bp.route("/api/teams", methods=["GET"])
 def get_teams():
@@ -60,6 +63,38 @@ def get_teams():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@teams_bp.route("/api/teams/<int:team_id>/logo", methods=["GET"])
+def get_team_logo(team_id):
+    """Sert le logo d'une équipe comme image avec cache navigateur 7 jours.
+    Évite d'embarquer le base64 dans les réponses JSON de la liste."""
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT logo_path FROM teams WHERE id = %s", (team_id,))
+        row = cur.fetchone()
+        cur.close()
+
+    if not row or not row["logo_path"]:
+        return "", 404
+
+    logo = row["logo_path"]
+
+    try:
+        if logo.startswith("data:"):
+            # data:image/webp;base64,<data>
+            header, b64data = logo.split(",", 1)
+            mime = header.split(":")[1].split(";")[0]
+            img_bytes = base64.b64decode(b64data)
+            resp = Response(img_bytes, mimetype=mime)
+        else:
+            # Chemin fichier legacy
+            resp = send_from_directory(UPLOAD_FOLDER, logo)
+    except Exception:
+        return "", 500
+
+    resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return resp
 
 
 @teams_bp.route("/api/teams/<int:team_id>", methods=["GET"])
@@ -81,7 +116,7 @@ def get_team(team_id):
         if not rows:
             return jsonify({"error": "Équipe non trouvée"}), 404
         first = rows[0]
-        result = {
+        return jsonify({
             "id": first["id"],
             "name": first["name"],
             "captain_name": first["captain_name"],
@@ -89,8 +124,7 @@ def get_team(team_id):
             "logo_path": first["logo_path"],
             "created_at": str(first["created_at"]) if first["created_at"] else None,
             "players": [r["player_name"] for r in rows if r["player_name"]],
-        }
-        return jsonify(result)
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
