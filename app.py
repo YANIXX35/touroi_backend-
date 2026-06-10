@@ -64,12 +64,15 @@ def _prewarm_cache():
         from routes.matches import _fetch_matches, _fetch_results, _fetch_top_scorers
         from routes.public import _fetch_gallery, _fetch_announcements
 
-        _cache.get_or_compute("teams_list",  _fetch_teams_list,    ttl_seconds=300)
-        _cache.get_or_compute("matches_list", _fetch_matches,       ttl_seconds=120)
-        _cache.get_or_compute("results",      _fetch_results,       ttl_seconds=120)
-        _cache.get_or_compute("top_scorers",  _fetch_top_scorers,   ttl_seconds=120)
-        _cache.get_or_compute("announcements", _fetch_announcements, ttl_seconds=120)
-        _cache.get_or_compute("gallery",      _fetch_gallery,       ttl_seconds=300)
+        # Utilise set() directement pour ne pas interférer avec le mécanisme
+        # inflight des routes : le pre-warmer peuple le cache sans bloquer
+        # les requêtes utilisateurs qui arriveraient pendant le chargement.
+        _cache.set("teams_list",   _fetch_teams_list(),    ttl_seconds=300)
+        _cache.set("matches_list", _fetch_matches(),       ttl_seconds=120)
+        _cache.set("results",      _fetch_results(),       ttl_seconds=120)
+        _cache.set("top_scorers",  _fetch_top_scorers(),   ttl_seconds=120)
+        _cache.set("announcements", _fetch_announcements(), ttl_seconds=120)
+        _cache.set("gallery",      _fetch_gallery(),       ttl_seconds=300)
         logging.info("Cache pré-chargé avec succès (worker prêt)")
     except Exception as _e:
         logging.warning("Pré-chauffe cache échouée (non bloquant): %s", _e)

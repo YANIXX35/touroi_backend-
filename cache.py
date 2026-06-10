@@ -74,8 +74,8 @@ def get_or_compute(key: str, fn, ttl_seconds: int = 60):
             is_fetcher = True
 
     if not is_fetcher:
-        # Attendre que le fetcher finisse (max 10 s)
-        wait_evt.wait(timeout=10.0)
+        # Attendre que le fetcher finisse (max 25 s — dépasse le timeout HTTP des routes)
+        wait_evt.wait(timeout=25.0)
         return get(key)   # None si le fetcher a échoué
 
     # Ce thread est le fetcher désigné
