@@ -16,9 +16,9 @@ _responsables_raw = os.environ.get(
 RESPONSABLES_EMAILS = [e.strip() for e in _responsables_raw.split(",") if e.strip()]
 
 # --- Infos du tournoi ---
-TOURNOI_NOM = os.environ.get("TOURNOI_NOM", "Tournoi FJU Côte d'Ivoire 2026")
+TOURNOI_NOM = os.environ.get("TOURNOI_NOM", "Tournoi de Football de l'Étoile Universelle de Grand Bassam 2026")
 TOURNOI_DATE_DEBUT = "2026-06-13"
-TOURNOI_LIEU = "Terrain de l'Église"
+TOURNOI_LIEU = "Grand Bassam"
 
 # --- Dossier uploads ---
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
