@@ -140,6 +140,8 @@ def login():
 @admin_bp.route("/api/admin/teams", methods=["GET"])
 @token_required
 def admin_get_teams():
+    include_photos = request.args.get("photos", "0") == "1"
+
     conn = get_db()
     cur = get_cursor(conn)
 
@@ -169,11 +171,19 @@ def admin_get_teams():
                 "players": [],
             }
         if row["player_id"]:
-            teams_map[tid]["players"].append({
-                "id": row["player_id"],
-                "player_name": row["player_name"],
-                "photo_path": row["photo_path"],
-            })
+            if include_photos:
+                teams_map[tid]["players"].append({
+                    "id": row["player_id"],
+                    "player_name": row["player_name"],
+                    "photo_path": row["photo_path"],
+                })
+            else:
+                teams_map[tid]["players"].append({
+                    "id": row["player_id"],
+                    "player_name": row["player_name"],
+                    "photo_path": None,
+                    "has_photo": bool(row["photo_path"]),
+                })
 
     return jsonify(list(teams_map.values()))
 

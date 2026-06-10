@@ -23,7 +23,7 @@ TOURNOI_LIEU = "Grand Bassam"
 # --- Dossier uploads ---
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
-MAX_PHOTO_SIZE = (400, 400)
+MAX_PHOTO_SIZE = (200, 200)
 
 # --- Admin par défaut ---
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
