@@ -1,5 +1,6 @@
 import io
 import base64
+import threading
 from flask import Blueprint, request, jsonify, Response, send_from_directory
 from database import db_conn, get_cursor
 from email_service import send_registration_email
@@ -9,6 +10,35 @@ import cache as _cache
 from PIL import Image
 
 teams_bp = Blueprint("teams", __name__)
+
+# Cache mémoire pour les logos décodés — évite de frapper la DB pour chaque
+# requête d'image (50 users × 13 logos = 650 requêtes sinon).
+_logo_cache: dict = {}   # {team_id: {"bytes": bytes, "mime": str} | None}
+_logo_lock = threading.Lock()
+
+
+def _prewarm_logos():
+    """Charge tous les logos validés en mémoire au démarrage du worker."""
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute(
+                "SELECT id, logo_path FROM teams "
+                "WHERE validated = 1 AND logo_path IS NOT NULL AND logo_path != ''"
+            )
+            rows = cur.fetchall()
+            cur.close()
+        for row in rows:
+            tid = row["id"]
+            logo = row["logo_path"]
+            if logo.startswith("data:"):
+                header, b64data = logo.split(",", 1)
+                mime = header.split(":")[1].split(";")[0]
+                img_bytes = base64.b64decode(b64data)
+                with _logo_lock:
+                    _logo_cache[tid] = {"bytes": img_bytes, "mime": mime}
+    except Exception:
+        pass
 
 
 def allowed_file(filename):
@@ -68,33 +98,48 @@ def get_teams():
 @teams_bp.route("/api/teams/<int:team_id>/logo", methods=["GET"])
 def get_team_logo(team_id):
     """Sert le logo d'une équipe comme image avec cache navigateur 7 jours.
-    Évite d'embarquer le base64 dans les réponses JSON de la liste."""
-    with db_conn() as conn:
-        cur = get_cursor(conn)
-        cur.execute("SELECT logo_path FROM teams WHERE id = %s", (team_id,))
-        row = cur.fetchone()
-        cur.close()
+    Sert depuis la mémoire après le premier accès — aucune requête DB."""
+    # Chemin rapide : cache mémoire (pas de DB, pas de décodage base64)
+    with _logo_lock:
+        if team_id in _logo_cache:
+            entry = _logo_cache[team_id]
+            if entry is None:
+                return "", 404
+            resp = Response(entry["bytes"], mimetype=entry["mime"])
+            resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+            return resp
+
+    # Premier accès : charger depuis la DB et mettre en cache
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("SELECT logo_path FROM teams WHERE id = %s", (team_id,))
+            row = cur.fetchone()
+            cur.close()
+    except Exception:
+        return "", 503
 
     if not row or not row["logo_path"]:
+        with _logo_lock:
+            _logo_cache[team_id] = None
         return "", 404
 
     logo = row["logo_path"]
-
     try:
         if logo.startswith("data:"):
-            # data:image/webp;base64,<data>
             header, b64data = logo.split(",", 1)
             mime = header.split(":")[1].split(";")[0]
             img_bytes = base64.b64decode(b64data)
+            entry = {"bytes": img_bytes, "mime": mime}
+            with _logo_lock:
+                _logo_cache[team_id] = entry
             resp = Response(img_bytes, mimetype=mime)
         else:
-            # Chemin fichier legacy
             resp = send_from_directory(UPLOAD_FOLDER, logo)
+        resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        return resp
     except Exception:
         return "", 500
-
-    resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
-    return resp
 
 
 @teams_bp.route("/api/teams/<int:team_id>", methods=["GET"])
