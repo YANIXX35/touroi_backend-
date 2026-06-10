@@ -135,11 +135,17 @@ def get_team_logo(team_id):
                 _logo_cache[team_id] = entry
             resp = Response(img_bytes, mimetype=mime)
         else:
-            resp = send_from_directory(UPLOAD_FOLDER, logo)
+            # Logo stocké comme fichier (legacy) — le fichier n'existe plus
+            # sur le filesystem éphémère de Render : marquer comme absent
+            with _logo_lock:
+                _logo_cache[team_id] = None
+            return "", 404
         resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return resp
     except Exception:
-        return "", 500
+        with _logo_lock:
+            _logo_cache[team_id] = None
+        return "", 404
 
 
 @teams_bp.route("/api/teams/<int:team_id>", methods=["GET"])
