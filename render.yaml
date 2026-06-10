@@ -5,6 +5,7 @@ services:
     region: frankfurt
     plan: free
     buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app -c gunicorn.conf.py
     envVars:
       - key: WEB_CONCURRENCY
         value: "3"
