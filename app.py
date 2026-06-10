@@ -1,7 +1,12 @@
 import os
+import time
+import logging
 from flask import Flask, request, send_from_directory
 from flask_cors import CORS
 from flask_compress import Compress
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+_perf_log = logging.getLogger("perf")
 from database import init_db
 from routes.teams import teams_bp
 from routes.matches import matches_bp
@@ -48,6 +53,25 @@ app.register_blueprint(public_bp)
 # Créer le dossier uploads et initialiser la BDD au démarrage (gunicorn inclus)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 init_db()
+
+
+@app.before_request
+def _start_timer():
+    request._t0 = time.monotonic()
+
+
+@app.after_request
+def _log_perf(response):
+    t0 = getattr(request, "_t0", None)
+    if t0 and not request.path.startswith("/uploads"):
+        ms = (time.monotonic() - t0) * 1000
+        if ms >= 1000:
+            _perf_log.warning("CRITIQUE  %s %s → %d  [%.0f ms]", request.method, request.path, response.status_code, ms)
+        elif ms >= 300:
+            _perf_log.warning("LENT      %s %s → %d  [%.0f ms]", request.method, request.path, response.status_code, ms)
+        elif ms >= 100:
+            _perf_log.info("MOYEN     %s %s → %d  [%.0f ms]", request.method, request.path, response.status_code, ms)
+    return response
 
 
 @app.after_request

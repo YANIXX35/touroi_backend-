@@ -30,6 +30,14 @@ def invalidate(key: str):
         _store.pop(key, None)
 
 
+def invalidate_prefix(prefix: str):
+    """Supprime toutes les cles dont le nom commence par prefix."""
+    with _lock:
+        to_delete = [k for k in _store if k.startswith(prefix)]
+        for k in to_delete:
+            del _store[k]
+
+
 def invalidate_all():
     """Vide tout le cache."""
     with _lock:

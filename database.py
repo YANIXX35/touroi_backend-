@@ -174,6 +174,11 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(active)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created_at DESC)")
 
+    # Index fonctionnels pour les requetes LOWER(team_name) dans team_detail et goals
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_team1_lower ON matches(LOWER(team1_name))")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_team2_lower ON matches(LOWER(team2_name))")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_goals_team_lower ON goals(LOWER(team_name))")
+
     cur.execute("SELECT id FROM admins WHERE username = %s", (ADMIN_USERNAME,))
     existing = cur.fetchone()
 

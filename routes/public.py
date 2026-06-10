@@ -54,6 +54,9 @@ def get_announcements():
 
 @public_bp.route("/api/teams/<int:team_id>/detail", methods=["GET"])
 def get_team_detail(team_id):
+    cached = cache_get(f"team_detail_{team_id}")
+    if cached is not None:
+        return jsonify(cached)
     try:
         conn = get_db()
         cur = get_cursor(conn)
@@ -122,7 +125,7 @@ def get_team_detail(team_id):
 
         cur.close(); conn.close()
 
-        return jsonify({
+        result = {
             **team,
             "matches": matches,
             "stats": {
@@ -131,6 +134,8 @@ def get_team_detail(team_id):
                 "points": won * 3 + drawn,
             },
             "scorers": scorers,
-        })
+        }
+        cache_set(f"team_detail_{team_id}", result, ttl_seconds=120)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
