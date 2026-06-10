@@ -19,7 +19,7 @@ from config import UPLOAD_FOLDER, FRONTEND_URL
 app = Flask(__name__)
 
 app.config["COMPRESS_MIMETYPES"] = ["application/json", "text/html", "text/plain"]
-app.config["COMPRESS_LEVEL"] = 6
+app.config["COMPRESS_LEVEL"] = 3
 app.config["COMPRESS_MIN_SIZE"] = 500
 Compress(app)
 
