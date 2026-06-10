@@ -1,6 +1,15 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from database import get_db, get_cursor
 from cache import get as cache_get, set as cache_set
+
+
+def _strip_photos(data: dict) -> dict:
+    """Retire les photos base64 pour le mode lite (connexion lente)."""
+    return {
+        **data,
+        "logo_path": None,
+        "players": [{**p, "photo_path": None} for p in data.get("players", [])],
+    }
 
 public_bp = Blueprint("public", __name__)
 
@@ -54,9 +63,10 @@ def get_announcements():
 
 @public_bp.route("/api/teams/<int:team_id>/detail", methods=["GET"])
 def get_team_detail(team_id):
+    lite = request.args.get("lite", "0") == "1"
     cached = cache_get(f"team_detail_{team_id}")
     if cached is not None:
-        return jsonify(cached)
+        return jsonify(_strip_photos(cached) if lite else cached)
     try:
         conn = get_db()
         cur = get_cursor(conn)
@@ -136,6 +146,6 @@ def get_team_detail(team_id):
             "scorers": scorers,
         }
         cache_set(f"team_detail_{team_id}", result, ttl_seconds=120)
-        return jsonify(result)
+        return jsonify(_strip_photos(result) if lite else result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
