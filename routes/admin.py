@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from database import get_db, get_cursor
+from database import db_conn, get_cursor
 from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS, UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
 from cache import invalidate as cache_invalidate
 import bcrypt
@@ -10,19 +10,17 @@ from threading import Lock
 import os
 import io
 import base64
-import uuid
 
 admin_bp = Blueprint("admin", __name__)
 
-# ─── Rate limiting (brute-force protection) ────────────────────────────────
-_attempts: dict = {}  # ip -> {"count": int, "locked_until": datetime|None}
+# ─── Rate limiting ─────────────────────────────────────────────────────────────
+_attempts: dict = {}
 _lock = Lock()
 _MAX_ATTEMPTS = 5
 _LOCKOUT_MINUTES = 15
 
 
 def _check_rate_limit(ip: str):
-    """Returns (allowed: bool, error_msg: str)."""
     with _lock:
         now = datetime.utcnow()
         entry = _attempts.get(ip)
@@ -50,7 +48,7 @@ def _clear_attempts(ip: str):
         _attempts.pop(ip, None)
 
 
-# ─── JWT auth decorator ────────────────────────────────────────────────────
+# ─── JWT auth decorator ────────────────────────────────────────────────────────
 
 def token_required(f):
     @wraps(f)
@@ -61,12 +59,11 @@ def token_required(f):
         try:
             payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
             username = payload.get("sub", "")
-            conn = get_db()
-            cur = get_cursor(conn)
-            cur.execute("SELECT id FROM admins WHERE username = %s", (username,))
-            admin = cur.fetchone()
-            cur.close()
-            conn.close()
+            with db_conn() as conn:
+                cur = get_cursor(conn)
+                cur.execute("SELECT id FROM admins WHERE username = %s", (username,))
+                admin = cur.fetchone()
+                cur.close()
             if not admin:
                 return jsonify({"error": "Utilisateur invalide"}), 401
         except jwt.ExpiredSignatureError:
@@ -77,20 +74,18 @@ def token_required(f):
     return decorated
 
 
-# ─── Authentification ──────────────────────────────────────────────────────
+# ─── Authentification ──────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/refresh", methods=["POST"])
 @token_required
 def refresh_token():
-    """Émet un nouveau token si l'actuel est encore valide."""
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
         username = payload.get("sub", "")
         new_token = jwt.encode(
             {"sub": username, "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)},
-            JWT_SECRET_KEY,
-            algorithm="HS256",
+            JWT_SECRET_KEY, algorithm="HS256",
         )
         return jsonify({"token": new_token})
     except Exception:
@@ -100,7 +95,6 @@ def refresh_token():
 @admin_bp.route("/api/admin/login", methods=["POST"])
 def login():
     ip = request.remote_addr or "unknown"
-
     allowed, err_msg = _check_rate_limit(ip)
     if not allowed:
         return jsonify({"error": err_msg}), 429
@@ -108,16 +102,14 @@ def login():
     data = request.get_json(silent=True) or {}
     username = data.get("username", "")
     password = data.get("password", "")
-
     if not username or not password:
         return jsonify({"error": "Identifiants manquants"}), 400
 
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute("SELECT * FROM admins WHERE username = %s", (username,))
-    admin = cur.fetchone()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT * FROM admins WHERE username = %s", (username,))
+        admin = cur.fetchone()
+        cur.close()
 
     if not admin or not bcrypt.checkpw(password.encode("utf-8"), admin["password_hash"].encode("utf-8")):
         _record_failure(ip)
@@ -125,66 +117,50 @@ def login():
 
     _clear_attempts(ip)
     token = jwt.encode(
-        {
-            "sub": admin["username"],
-            "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
-        },
-        JWT_SECRET_KEY,
-        algorithm="HS256",
+        {"sub": admin["username"], "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)},
+        JWT_SECRET_KEY, algorithm="HS256",
     )
     return jsonify({"token": token, "username": admin["username"]})
 
 
-# ─── Gestion des équipes ───────────────────────────────────────────────────
+# ─── Équipes ───────────────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/teams", methods=["GET"])
 @token_required
 def admin_get_teams():
     include_photos = request.args.get("photos", "0") == "1"
-
-    conn = get_db()
-    cur = get_cursor(conn)
-
-    cur.execute("""
-        SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at, t.validated,
-               p.id AS player_id, p.player_name, p.photo_path
-        FROM teams t
-        LEFT JOIN players p ON p.team_id = t.id
-        ORDER BY t.created_at DESC, p.id
-    """)
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("""
+            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at, t.validated,
+                   p.id AS player_id, p.player_name, p.photo_path
+            FROM teams t
+            LEFT JOIN players p ON p.team_id = t.id
+            ORDER BY t.created_at DESC, p.id
+        """)
+        rows = cur.fetchall()
+        cur.close()
 
     teams_map: dict = {}
     for row in rows:
         tid = row["id"]
         if tid not in teams_map:
             teams_map[tid] = {
-                "id": tid,
-                "name": row["name"],
-                "captain_name": row["captain_name"],
-                "phone": row["phone"],
-                "logo_path": row["logo_path"],
+                "id": tid, "name": row["name"], "captain_name": row["captain_name"],
+                "phone": row["phone"], "logo_path": row["logo_path"],
                 "created_at": str(row["created_at"]) if row["created_at"] else None,
-                "validated": row["validated"],
-                "players": [],
+                "validated": row["validated"], "players": [],
             }
         if row["player_id"]:
             if include_photos:
                 teams_map[tid]["players"].append({
-                    "id": row["player_id"],
-                    "player_name": row["player_name"],
-                    "photo_path": row["photo_path"],
+                    "id": row["player_id"], "player_name": row["player_name"], "photo_path": row["photo_path"],
                 })
             else:
                 teams_map[tid]["players"].append({
-                    "id": row["player_id"],
-                    "player_name": row["player_name"],
-                    "photo_path": None,
-                    "has_photo": bool(row["photo_path"]),
+                    "id": row["player_id"], "player_name": row["player_name"],
+                    "photo_path": None, "has_photo": bool(row["photo_path"]),
                 })
-
     return jsonify(list(teams_map.values()))
 
 
@@ -193,16 +169,11 @@ def admin_get_teams():
 def admin_update_team(team_id):
     data = request.get_json()
     validated = data.get("validated")
-
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute(
-        "UPDATE teams SET validated = %s WHERE id = %s",
-        (1 if validated else 0, team_id)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("UPDATE teams SET validated = %s WHERE id = %s", (1 if validated else 0, team_id))
+        conn.commit()
+        cur.close()
     cache_invalidate("teams_list")
     return jsonify({"message": "Équipe mise à jour"})
 
@@ -210,17 +181,16 @@ def admin_update_team(team_id):
 @admin_bp.route("/api/admin/teams/<int:team_id>", methods=["DELETE"])
 @token_required
 def admin_delete_team(team_id):
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute("DELETE FROM teams WHERE id = %s", (team_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM teams WHERE id = %s", (team_id,))
+        conn.commit()
+        cur.close()
     cache_invalidate("teams_list")
     return jsonify({"message": "Équipe supprimée"})
 
 
-# ─── Gestion des matchs ────────────────────────────────────────────────────
+# ─── Matchs ────────────────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/matches", methods=["POST"])
 @token_required
@@ -230,44 +200,29 @@ def admin_create_match():
     t2 = (data.get("team2_name") or "").strip()
     match_date = (data.get("match_date") or "").strip()
     match_time = (data.get("match_time") or "").strip()
-
     if not t1 or not t2:
         return jsonify({"error": "Les noms des deux équipes sont requis"}), 400
 
-    conn = get_db()
-    cur = get_cursor(conn)
-
-    # Protection doublon : même équipes + même date + même heure
-    cur.execute(
-        """SELECT id FROM matches
-           WHERE LOWER(team1_name) = LOWER(%s) AND LOWER(team2_name) = LOWER(%s)
-             AND match_date = %s AND match_time = %s""",
-        (t1, t2, match_date, match_time),
-    )
-    if cur.fetchone():
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            """SELECT id FROM matches
+               WHERE LOWER(team1_name) = LOWER(%s) AND LOWER(team2_name) = LOWER(%s)
+                 AND match_date = %s AND match_time = %s""",
+            (t1, t2, match_date, match_time),
+        )
+        if cur.fetchone():
+            cur.close()
+            return jsonify({"error": "Ce match existe déjà (mêmes équipes, même date et heure)"}), 409
+        cur.execute(
+            """INSERT INTO matches
+               (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, 'upcoming') RETURNING id""",
+            (data.get("team1_id"), data.get("team2_id"), t1, t2, match_date, match_time, data.get("phase", "Poule")),
+        )
+        match_id = cur.fetchone()["id"]
+        conn.commit()
         cur.close()
-        conn.close()
-        return jsonify({"error": "Ce match existe déjà (mêmes équipes, même date et heure)"}), 409
-
-    cur.execute(
-        """INSERT INTO matches
-           (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, 'upcoming')
-           RETURNING id""",
-        (
-            data.get("team1_id"),
-            data.get("team2_id"),
-            t1,
-            t2,
-            match_date,
-            match_time,
-            data.get("phase", "Poule"),
-        ),
-    )
-    match_id = cur.fetchone()["id"]
-    conn.commit()
-    cur.close()
-    conn.close()
     cache_invalidate("matches_list")
     cache_invalidate("results")
     return jsonify({"message": "Match créé", "id": match_id}), 201
@@ -277,26 +232,20 @@ def admin_create_match():
 @token_required
 def admin_update_match(match_id):
     data = request.get_json()
-
-    fields = []
-    values = []
-
+    fields, values = [], []
     for field in ["team1_id", "team2_id", "team1_name", "team2_name",
                   "match_date", "match_time", "phase", "score1", "score2", "status"]:
         if field in data:
             fields.append(f"{field} = %s")
             values.append(data[field])
-
     if not fields:
         return jsonify({"error": "Aucune donnée à modifier"}), 400
-
     values.append(match_id)
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", values)
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", values)
+        conn.commit()
+        cur.close()
     cache_invalidate("matches_list")
     cache_invalidate("results")
     return jsonify({"message": "Match mis à jour"})
@@ -305,18 +254,17 @@ def admin_update_match(match_id):
 @admin_bp.route("/api/admin/matches/<int:match_id>", methods=["DELETE"])
 @token_required
 def admin_delete_match(match_id):
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM matches WHERE id = %s", (match_id,))
+        conn.commit()
+        cur.close()
     cache_invalidate("matches_list")
     cache_invalidate("results")
     return jsonify({"message": "Match supprimé"})
 
 
-# ─── Gestion des joueurs ───────────────────────────────────────────────────
+# ─── Joueurs ───────────────────────────────────────────────────────────────────
 
 def _allowed_photo(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -330,16 +278,15 @@ def admin_add_player(team_id):
     photo_path = data.get("photo_path") or None
     if not player_name:
         return jsonify({"error": "Nom requis"}), 400
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute(
-        "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s) RETURNING id",
-        (team_id, player_name, photo_path),
-    )
-    player_id = cur.fetchone()["id"]
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s) RETURNING id",
+            (team_id, player_name, photo_path),
+        )
+        player_id = cur.fetchone()["id"]
+        conn.commit()
+        cur.close()
     cache_invalidate("teams_list")
     return jsonify({"id": player_id, "player_name": player_name, "photo_path": photo_path}), 201
 
@@ -351,21 +298,17 @@ def admin_update_player(player_id):
     player_name = (data.get("player_name") or "").strip()
     if not player_name:
         return jsonify({"error": "Nom requis"}), 400
-    conn = get_db()
-    cur = get_cursor(conn)
-    if "photo_path" in data:
-        cur.execute(
-            "UPDATE players SET player_name = %s, photo_path = %s WHERE id = %s",
-            (player_name, data["photo_path"], player_id),
-        )
-    else:
-        cur.execute(
-            "UPDATE players SET player_name = %s WHERE id = %s",
-            (player_name, player_id),
-        )
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        if "photo_path" in data:
+            cur.execute(
+                "UPDATE players SET player_name = %s, photo_path = %s WHERE id = %s",
+                (player_name, data["photo_path"], player_id),
+            )
+        else:
+            cur.execute("UPDATE players SET player_name = %s WHERE id = %s", (player_name, player_id))
+        conn.commit()
+        cur.close()
     cache_invalidate("teams_list")
     return jsonify({"message": "Joueur mis à jour"})
 
@@ -373,12 +316,11 @@ def admin_update_player(player_id):
 @admin_bp.route("/api/admin/players/<int:player_id>", methods=["DELETE"])
 @token_required
 def admin_delete_player(player_id):
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute("DELETE FROM players WHERE id = %s", (player_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM players WHERE id = %s", (player_id,))
+        conn.commit()
+        cur.close()
     cache_invalidate("teams_list")
     return jsonify({"message": "Joueur supprimé"})
 
@@ -405,17 +347,16 @@ def admin_upload_photo():
         return jsonify({"error": str(e)}), 500
 
 
-# ─── Buteurs & Passeurs ────────────────────────────────────────────────────
+# ─── Buteurs & Passeurs ────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/matches/<int:match_id>/goals", methods=["GET"])
 @token_required
 def get_match_goals(match_id):
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute("SELECT * FROM goals WHERE match_id = %s ORDER BY minute NULLS LAST, id", (match_id,))
-    goals = [dict(g) for g in cur.fetchall()]
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT * FROM goals WHERE match_id = %s ORDER BY minute NULLS LAST, id", (match_id,))
+        goals = [dict(g) for g in cur.fetchall()]
+        cur.close()
     return jsonify(goals)
 
 
@@ -431,16 +372,15 @@ def add_goal(match_id):
         return jsonify({"error": "Nom du joueur et équipe requis"}), 400
     if type_ not in ("goal", "assist"):
         return jsonify({"error": "Type invalide (goal ou assist)"}), 400
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute(
-        "INSERT INTO goals (match_id, player_name, team_name, type, minute) VALUES (%s,%s,%s,%s,%s) RETURNING id",
-        (match_id, player_name, team_name, type_, minute),
-    )
-    goal_id = cur.fetchone()["id"]
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO goals (match_id, player_name, team_name, type, minute) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (match_id, player_name, team_name, type_, minute),
+        )
+        goal_id = cur.fetchone()["id"]
+        conn.commit()
+        cur.close()
     cache_invalidate("top_scorers")
     return jsonify({"id": goal_id, "match_id": match_id, "player_name": player_name,
                     "team_name": team_name, "type": type_, "minute": minute}), 201
@@ -456,15 +396,14 @@ def update_goal(goal_id):
     minute      = data.get("minute") or None
     if not player_name or not team_name:
         return jsonify({"error": "Nom du joueur et équipe requis"}), 400
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute(
-        "UPDATE goals SET player_name=%s, team_name=%s, type=%s, minute=%s WHERE id=%s",
-        (player_name, team_name, type_, minute, goal_id),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            "UPDATE goals SET player_name=%s, team_name=%s, type=%s, minute=%s WHERE id=%s",
+            (player_name, team_name, type_, minute, goal_id),
+        )
+        conn.commit()
+        cur.close()
     cache_invalidate("top_scorers")
     return jsonify({"message": "But/Passe mis à jour"})
 
@@ -472,17 +411,16 @@ def update_goal(goal_id):
 @admin_bp.route("/api/admin/goals/<int:goal_id>", methods=["DELETE"])
 @token_required
 def delete_goal(goal_id):
-    conn = get_db()
-    cur = get_cursor(conn)
-    cur.execute("DELETE FROM goals WHERE id=%s", (goal_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM goals WHERE id=%s", (goal_id,))
+        conn.commit()
+        cur.close()
     cache_invalidate("top_scorers")
     return jsonify({"message": "Supprimé"})
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────
+# ─── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_username():
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -495,26 +433,29 @@ def _get_username():
 def _log(action: str, details: str = ""):
     try:
         username = _get_username()
-        conn = get_db(); cur = get_cursor(conn)
-        cur.execute(
-            "INSERT INTO admin_logs (username, action, details) VALUES (%s, %s, %s)",
-            (username, action, (details or "")[:500])
-        )
-        conn.commit(); cur.close(); conn.close()
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute(
+                "INSERT INTO admin_logs (username, action, details) VALUES (%s, %s, %s)",
+                (username, action, (details or "")[:500])
+            )
+            conn.commit()
+            cur.close()
     except Exception:
         pass
 
 
-# ─── Galerie (admin) ──────────────────────────────────────────────────────
+# ─── Galerie ───────────────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/gallery", methods=["GET"])
 @token_required
 def admin_get_gallery():
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute("SELECT id, title, photo_path, created_at FROM gallery ORDER BY created_at DESC")
-    rows = [{"id": r["id"], "title": r["title"], "photo_path": r["photo_path"],
-             "created_at": str(r["created_at"])} for r in cur.fetchall()]
-    cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT id, title, photo_path, created_at FROM gallery ORDER BY created_at DESC")
+        rows = [{"id": r["id"], "title": r["title"], "photo_path": r["photo_path"],
+                 "created_at": str(r["created_at"])} for r in cur.fetchall()]
+        cur.close()
     return jsonify(rows)
 
 
@@ -526,13 +467,15 @@ def admin_add_photo():
     title = (data.get("title") or "").strip()
     if not photo_path:
         return jsonify({"error": "Photo requise"}), 400
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute(
-        "INSERT INTO gallery (title, photo_path) VALUES (%s, %s) RETURNING id, created_at",
-        (title or None, photo_path)
-    )
-    row = cur.fetchone()
-    conn.commit(); cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO gallery (title, photo_path) VALUES (%s, %s) RETURNING id, created_at",
+            (title or None, photo_path)
+        )
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
     cache_invalidate("gallery")
     _log("gallery_add", title or "sans titre")
     return jsonify({"id": row["id"], "title": title, "photo_path": photo_path,
@@ -544,9 +487,11 @@ def admin_add_photo():
 def admin_update_photo(photo_id):
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip() or None
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute("UPDATE gallery SET title=%s WHERE id=%s", (title, photo_id))
-    conn.commit(); cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("UPDATE gallery SET title=%s WHERE id=%s", (title, photo_id))
+        conn.commit()
+        cur.close()
     cache_invalidate("gallery")
     _log("gallery_update", f"photo #{photo_id}")
     return jsonify({"id": photo_id, "title": title})
@@ -555,25 +500,28 @@ def admin_update_photo(photo_id):
 @admin_bp.route("/api/admin/gallery/<int:photo_id>", methods=["DELETE"])
 @token_required
 def admin_delete_photo(photo_id):
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute("DELETE FROM gallery WHERE id=%s", (photo_id,))
-    conn.commit(); cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM gallery WHERE id=%s", (photo_id,))
+        conn.commit()
+        cur.close()
     cache_invalidate("gallery")
     _log("gallery_delete", f"photo #{photo_id}")
     return jsonify({"message": "Photo supprimée"})
 
 
-# ─── Annonces (admin) ─────────────────────────────────────────────────────
+# ─── Annonces ──────────────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/announcements", methods=["GET"])
 @token_required
 def admin_get_announcements():
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute("SELECT id, title, content, type, active, created_at FROM announcements ORDER BY created_at DESC")
-    rows = [{"id": r["id"], "title": r["title"], "content": r["content"],
-             "type": r["type"], "active": r["active"], "created_at": str(r["created_at"])}
-            for r in cur.fetchall()]
-    cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT id, title, content, type, active, created_at FROM announcements ORDER BY created_at DESC")
+        rows = [{"id": r["id"], "title": r["title"], "content": r["content"],
+                 "type": r["type"], "active": r["active"], "created_at": str(r["created_at"])}
+                for r in cur.fetchall()]
+        cur.close()
     return jsonify(rows)
 
 
@@ -588,13 +536,15 @@ def admin_add_announcement():
         return jsonify({"error": "Titre et contenu requis"}), 400
     if type_ not in ("info", "warning", "urgent"):
         type_ = "info"
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute(
-        "INSERT INTO announcements (title, content, type) VALUES (%s, %s, %s) RETURNING id, created_at",
-        (title, content, type_)
-    )
-    row = cur.fetchone()
-    conn.commit(); cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO announcements (title, content, type) VALUES (%s, %s, %s) RETURNING id, created_at",
+            (title, content, type_)
+        )
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
     cache_invalidate("announcements")
     _log("announcement_add", title)
     return jsonify({"id": row["id"], "title": title, "content": content,
@@ -605,18 +555,22 @@ def admin_add_announcement():
 @token_required
 def admin_update_announcement(ann_id):
     data = request.get_json() or {}
-    conn = get_db(); cur = get_cursor(conn)
     fields, values = [], []
     for f in ["title", "content", "type"]:
         if f in data:
-            fields.append(f"{f} = %s"); values.append(data[f])
+            fields.append(f"{f} = %s")
+            values.append(data[f])
     if "active" in data:
-        fields.append("active = %s"); values.append(bool(data["active"]))
+        fields.append("active = %s")
+        values.append(bool(data["active"]))
     if not fields:
         return jsonify({"error": "Rien à modifier"}), 400
     values.append(ann_id)
-    cur.execute(f"UPDATE announcements SET {', '.join(fields)} WHERE id = %s", values)
-    conn.commit(); cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(f"UPDATE announcements SET {', '.join(fields)} WHERE id = %s", values)
+        conn.commit()
+        cur.close()
     cache_invalidate("announcements")
     _log("announcement_update", f"#{ann_id}")
     return jsonify({"message": "Annonce mise à jour"})
@@ -625,22 +579,25 @@ def admin_update_announcement(ann_id):
 @admin_bp.route("/api/admin/announcements/<int:ann_id>", methods=["DELETE"])
 @token_required
 def admin_delete_announcement(ann_id):
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute("DELETE FROM announcements WHERE id=%s", (ann_id,))
-    conn.commit(); cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM announcements WHERE id=%s", (ann_id,))
+        conn.commit()
+        cur.close()
     cache_invalidate("announcements")
     _log("announcement_delete", f"#{ann_id}")
     return jsonify({"message": "Annonce supprimée"})
 
 
-# ─── Historique admin ─────────────────────────────────────────────────────
+# ─── Logs ──────────────────────────────────────────────────────────────────────
 
 @admin_bp.route("/api/admin/logs", methods=["GET"])
 @token_required
 def admin_get_logs():
-    conn = get_db(); cur = get_cursor(conn)
-    cur.execute("SELECT id, username, action, details, created_at FROM admin_logs ORDER BY created_at DESC LIMIT 200")
-    rows = [{"id": r["id"], "username": r["username"], "action": r["action"],
-             "details": r["details"], "created_at": str(r["created_at"])} for r in cur.fetchall()]
-    cur.close(); conn.close()
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT id, username, action, details, created_at FROM admin_logs ORDER BY created_at DESC LIMIT 200")
+        rows = [{"id": r["id"], "username": r["username"], "action": r["action"],
+                 "details": r["details"], "created_at": str(r["created_at"])} for r in cur.fetchall()]
+        cur.close()
     return jsonify(rows)

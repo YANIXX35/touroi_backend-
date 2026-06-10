@@ -1,13 +1,11 @@
-import os
 import io
 import base64
 from flask import Blueprint, request, jsonify
-from database import get_db, get_cursor
+from database import db_conn, get_cursor
 from email_service import send_registration_email
-from config import UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
+from config import ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
 from cache import get as cache_get, set as cache_set, invalidate as cache_invalidate
 from PIL import Image
-import uuid
 
 teams_bp = Blueprint("teams", __name__)
 
@@ -22,19 +20,18 @@ def get_teams():
     if cached is not None:
         return jsonify(cached)
     try:
-        conn = get_db()
-        cur = get_cursor(conn)
-        cur.execute("""
-            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
-                   p.player_name
-            FROM teams t
-            LEFT JOIN players p ON p.team_id = t.id
-            WHERE t.validated = 1
-            ORDER BY t.name, p.id
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("""
+                SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
+                       p.player_name
+                FROM teams t
+                LEFT JOIN players p ON p.team_id = t.id
+                WHERE t.validated = 1
+                ORDER BY t.name, p.id
+            """)
+            rows = cur.fetchall()
+            cur.close()
 
         teams_map: dict = {}
         for row in rows:
@@ -61,19 +58,19 @@ def get_teams():
 @teams_bp.route("/api/teams/<int:team_id>", methods=["GET"])
 def get_team(team_id):
     try:
-        conn = get_db()
-        cur = get_cursor(conn)
-        cur.execute("""
-            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
-                   p.player_name
-            FROM teams t
-            LEFT JOIN players p ON p.team_id = t.id
-            WHERE t.id = %s AND t.validated = 1
-            ORDER BY p.id
-        """, (team_id,))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("""
+                SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at,
+                       p.player_name
+                FROM teams t
+                LEFT JOIN players p ON p.team_id = t.id
+                WHERE t.id = %s AND t.validated = 1
+                ORDER BY p.id
+            """, (team_id,))
+            rows = cur.fetchall()
+            cur.close()
+
         if not rows:
             return jsonify({"error": "Équipe non trouvée"}), 404
         first = rows[0]
@@ -93,8 +90,6 @@ def get_team(team_id):
 
 @teams_bp.route("/api/register", methods=["POST"])
 def register_team():
-    conn = None
-    cur = None
     try:
         data = request.get_json(force=True, silent=True)
         if not data:
@@ -115,46 +110,49 @@ def register_team():
         if len(players) == 0:
             return jsonify({"error": "Ajoutez au moins un joueur"}), 400
 
-        conn = get_db()
-        cur = get_cursor(conn)
+        with db_conn() as conn:
+            cur = get_cursor(conn)
 
-        cur.execute("SELECT id FROM teams WHERE name = %s", (name,))
-        if cur.fetchone():
-            return jsonify({"error": "Ce nom d'équipe est déjà pris"}), 409
+            cur.execute("SELECT id FROM teams WHERE name = %s", (name,))
+            if cur.fetchone():
+                cur.close()
+                return jsonify({"error": "Ce nom d'équipe est déjà pris"}), 409
 
-        cur.execute("SELECT id FROM teams WHERE phone = %s", (phone,))
-        if cur.fetchone():
-            return jsonify({"error": "Ce numéro de téléphone est déjà utilisé pour une inscription. Chaque équipe doit avoir un numéro unique."}), 409
+            cur.execute("SELECT id FROM teams WHERE phone = %s", (phone,))
+            if cur.fetchone():
+                cur.close()
+                return jsonify({"error": "Ce numéro de téléphone est déjà utilisé pour une inscription. Chaque équipe doit avoir un numéro unique."}), 409
 
-        cur.execute(
-            "INSERT INTO teams (name, captain_name, phone, logo_path) VALUES (%s, %s, %s, %s) RETURNING id",
-            (name, captain_name, phone, logo_path),
-        )
-        team_id = cur.fetchone()["id"]
+            cur.execute(
+                "INSERT INTO teams (name, captain_name, phone, logo_path) VALUES (%s, %s, %s, %s) RETURNING id",
+                (name, captain_name, phone, logo_path),
+            )
+            team_id = cur.fetchone()["id"]
 
-        for player in players:
-            if isinstance(player, str):
-                name_clean = player.strip()
-                photo_path = None
-            else:
-                name_clean = (player.get("player_name") or "").strip()
-                photo_path = player.get("photo_path") or None
-            if name_clean:
-                if len(name_clean) > 50:
-                    return jsonify({"error": f"Nom de joueur trop long (50 car. max) : {name_clean[:30]}"}), 400
-                cur.execute(
-                    "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s)",
-                    (team_id, name_clean, photo_path),
-                )
+            for player in players:
+                if isinstance(player, str):
+                    name_clean = player.strip()
+                    photo_path = None
+                else:
+                    name_clean = (player.get("player_name") or "").strip()
+                    photo_path = player.get("photo_path") or None
+                if name_clean:
+                    if len(name_clean) > 50:
+                        cur.close()
+                        return jsonify({"error": f"Nom de joueur trop long (50 car. max) : {name_clean[:30]}"}), 400
+                    cur.execute(
+                        "INSERT INTO players (team_id, player_name, photo_path) VALUES (%s, %s, %s)",
+                        (team_id, name_clean, photo_path),
+                    )
 
-        conn.commit()
-        cache_invalidate("teams_list")  # on vient d'ajouter une equipe, invalider le cache
+            conn.commit()
+            cache_invalidate("teams_list")
 
-        cur.execute("SELECT * FROM teams WHERE id = %s", (team_id,))
-        team_row = dict(cur.fetchone())
-        team_row["created_at"] = str(team_row["created_at"]) if team_row["created_at"] else None
+            cur.execute("SELECT * FROM teams WHERE id = %s", (team_id,))
+            team_row = dict(cur.fetchone())
+            team_row["created_at"] = str(team_row["created_at"]) if team_row["created_at"] else None
+            cur.close()
 
-        # Email envoyé dans un thread séparé — ne bloque pas la réponse HTTP
         import threading
         threading.Thread(
             target=send_registration_email,
@@ -165,19 +163,7 @@ def register_team():
         return jsonify({"message": "Inscription réussie ! En attente de validation.", "team_id": team_id}), 201
 
     except Exception as e:
-        if conn:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
         return jsonify({"error": f"Erreur serveur : {str(e)}"}), 500
-    finally:
-        if cur:
-            try: cur.close()
-            except Exception: pass
-        if conn:
-            try: conn.close()
-            except Exception: pass
 
 
 @teams_bp.route("/api/uploads/logo", methods=["POST"])

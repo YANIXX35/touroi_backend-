@@ -8,7 +8,7 @@ services:
     startCommand: gunicorn app:app -c gunicorn.conf.py
     envVars:
       - key: WEB_CONCURRENCY
-        value: "3"
+        value: "2"
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET_KEY
