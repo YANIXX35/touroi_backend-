@@ -2,9 +2,15 @@ import os
 import time
 import logging
 import threading
-from flask import Flask, request, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_compress import Compress
+
+# ── Overload guard ─────────────────────────────────────────────────────────────
+# If too many requests pile up, reject immediately instead of queuing and timing out.
+_active_requests = 0
+_active_lock = threading.Lock()
+MAX_CONCURRENT = 14  # 16 threads total — keep 2 free as buffer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 _perf_log = logging.getLogger("perf")
@@ -82,6 +88,31 @@ def _prewarm_cache():
 
 
 threading.Thread(target=_prewarm_cache, daemon=True).start()
+
+
+@app.before_request
+def _overload_guard():
+    global _active_requests
+    # Skip static/health routes — never shed those
+    if request.path in ("/api/health",) or request.path.startswith("/uploads"):
+        return
+    with _active_lock:
+        if _active_requests >= MAX_CONCURRENT:
+            _perf_log.warning("SURCHARGE  %s %s — requête rejetée (%d actives)", request.method, request.path, _active_requests)
+            resp = jsonify({"error": "Serveur temporairement surchargé. Réessayez dans quelques secondes."})
+            resp.status_code = 503
+            resp.headers["Retry-After"] = "3"
+            return resp
+        _active_requests += 1
+        request._counted = True
+
+
+@app.teardown_request
+def _release_slot(exc=None):
+    global _active_requests
+    if getattr(request, "_counted", False):
+        with _active_lock:
+            _active_requests = max(0, _active_requests - 1)
 
 
 @app.before_request
