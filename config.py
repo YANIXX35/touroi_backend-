@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 # --- Clé secrète JWT (lire depuis variable d'environnement en prod) ---
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "tournoi-eglise-secret-key-2024-secure!")
@@ -31,3 +32,8 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 # --- Frontend URL (pour CORS en prod) ---
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
+
+# --- Clôture des inscriptions ---
+# Les inscriptions ferment le 12 juin 2026 à 22h00 (heure Abidjan = UTC+0).
+# Après cette date, POST /api/register retourne 403.
+REGISTRATION_DEADLINE = datetime(2026, 6, 12, 22, 0, 0)

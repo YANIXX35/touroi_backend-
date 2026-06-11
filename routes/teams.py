@@ -4,7 +4,8 @@ import threading
 from flask import Blueprint, request, jsonify, Response, send_from_directory
 from database import db_conn, get_cursor
 from email_service import send_registration_email
-from config import ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE, UPLOAD_FOLDER
+from config import ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE, UPLOAD_FOLDER, REGISTRATION_DEADLINE
+from datetime import datetime
 from cache import invalidate as cache_invalidate
 import cache as _cache
 from PIL import Image
@@ -180,8 +181,23 @@ def get_team(team_id):
         return jsonify({"error": str(e)}), 500
 
 
+@teams_bp.route("/api/registration-status", methods=["GET"])
+def registration_status():
+    is_open = datetime.utcnow() < REGISTRATION_DEADLINE
+    return jsonify({
+        "open": is_open,
+        "deadline": REGISTRATION_DEADLINE.isoformat(),
+        "message": "" if is_open else "Les inscriptions sont définitivement fermées depuis le 12 juin 2026 à 22h00.",
+    })
+
+
 @teams_bp.route("/api/register", methods=["POST"])
 def register_team():
+    if datetime.utcnow() >= REGISTRATION_DEADLINE:
+        return jsonify({
+            "error": "Les inscriptions sont fermées depuis le 12 juin 2026 à 22h00. Le tournoi commence le 13 juin."
+        }), 403
+
     try:
         data = request.get_json(force=True, silent=True)
         if not data:
