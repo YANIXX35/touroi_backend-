@@ -8,8 +8,7 @@ from config import ADMIN_USERNAME, ADMIN_PASSWORD
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
-# Pool conservateur : minconn=1 evite d'ouvrir des connexions inutiles au demarrage.
-# maxconn=3 par worker (2 workers) = 6 connexions max — compatible avec Aiven free (max ~5-10).
+# 1 worker × 16 threads : maxconn=5 connexions PG — compatible Aiven free.
 _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 
 
@@ -18,7 +17,7 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     if _pool is None:
         _pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=1,
-            maxconn=3,
+            maxconn=5,
             dsn=DATABASE_URL,
         )
     return _pool

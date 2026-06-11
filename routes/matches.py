@@ -29,8 +29,7 @@ def _fetch_results():
         standings_by_id   = {t["id"]:   {"id": t["id"], "name": t["name"], "played": 0, "won": 0, "drawn": 0, "lost": 0, "goals_for": 0, "goals_against": 0, "points": 0} for t in teams_raw}
         standings_by_name = {t["name"]: standings_by_id[t["id"]] for t in teams_raw}
 
-        cur.execute("SELECT * FROM matches WHERE phase = 'Poule' AND status = 'finished'")
-        poule_matches = cur.fetchall()
+        poule_matches = [m for m in finished if m["phase"] == "Poule"]
 
         def _entry(team_id, team_name):
             if team_id and team_id in standings_by_id:
