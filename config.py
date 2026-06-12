@@ -1,8 +1,11 @@
 import os
+import logging
 from datetime import datetime
 
 # --- Clé secrète JWT (lire depuis variable d'environnement en prod) ---
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "tournoi-eglise-secret-key-2024-secure!")
+if not os.environ.get("JWT_SECRET_KEY"):
+    logging.warning("⚠️  JWT_SECRET_KEY non définie — clé par défaut utilisée (INSÉCURISÉ en prod)")
 JWT_EXPIRATION_HOURS = int(os.environ.get("JWT_EXPIRATION_HOURS", "24"))
 
 # --- Gmail SMTP ---
@@ -29,6 +32,8 @@ MAX_PHOTO_SIZE = (200, 200)
 # --- Admin par défaut ---
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+if not os.environ.get("ADMIN_PASSWORD"):
+    logging.warning("⚠️  ADMIN_PASSWORD non définie — mot de passe 'admin123' utilisé (INSÉCURISÉ en prod)")
 
 # --- Frontend URL (pour CORS en prod) ---
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "")

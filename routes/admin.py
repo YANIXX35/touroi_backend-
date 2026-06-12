@@ -131,13 +131,23 @@ def admin_get_teams():
     include_photos = request.args.get("photos", "0") == "1"
     with db_conn() as conn:
         cur = get_cursor(conn)
-        cur.execute("""
-            SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at, t.validated,
-                   p.id AS player_id, p.player_name, p.photo_path
-            FROM teams t
-            LEFT JOIN players p ON p.team_id = t.id
-            ORDER BY t.created_at DESC, p.id
-        """)
+        if include_photos:
+            cur.execute("""
+                SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at, t.validated,
+                       p.id AS player_id, p.player_name, p.photo_path
+                FROM teams t
+                LEFT JOIN players p ON p.team_id = t.id
+                ORDER BY t.created_at DESC, p.id
+            """)
+        else:
+            cur.execute("""
+                SELECT t.id, t.name, t.captain_name, t.phone, t.logo_path, t.created_at, t.validated,
+                       p.id AS player_id, p.player_name,
+                       p.photo_path IS NOT NULL AND p.photo_path != '' AS has_photo
+                FROM teams t
+                LEFT JOIN players p ON p.team_id = t.id
+                ORDER BY t.created_at DESC, p.id
+            """)
         rows = cur.fetchall()
         cur.close()
 
@@ -159,7 +169,7 @@ def admin_get_teams():
             else:
                 teams_map[tid]["players"].append({
                     "id": row["player_id"], "player_name": row["player_name"],
-                    "photo_path": None, "has_photo": bool(row["photo_path"]),
+                    "photo_path": None, "has_photo": bool(row["has_photo"]),
                 })
     return jsonify(list(teams_map.values()))
 
@@ -270,6 +280,7 @@ def admin_delete_match(match_id):
         cur.close()
     cache_invalidate("matches_list")
     cache_invalidate("results")
+    cache_invalidate("top_scorers")
     return jsonify({"message": "Match supprimé"})
 
 

@@ -44,8 +44,7 @@ def _prewarm_logos():
                 header, b64data = logo.split(",", 1)
                 mime = header.split(":")[1].split(";")[0]
                 img_bytes = base64.b64decode(b64data)
-                with _logo_lock:
-                    _logo_cache[tid] = {"bytes": img_bytes, "mime": mime}
+                _logo_cache_set(tid, {"bytes": img_bytes, "mime": mime})
     except Exception:
         pass
 
@@ -191,7 +190,7 @@ def registration_status():
     return jsonify({
         "open": is_open,
         "deadline": REGISTRATION_DEADLINE.isoformat(),
-        "message": "" if is_open else "Les inscriptions sont définitivement fermées depuis le 12 juin 2026 à 22h00.",
+        "message": "" if is_open else "Les inscriptions sont définitivement fermées depuis le 13 juin 2026 à 22h00.",
     })
 
 
@@ -199,7 +198,7 @@ def registration_status():
 def register_team():
     if datetime.utcnow() >= REGISTRATION_DEADLINE:
         return jsonify({
-            "error": "Les inscriptions sont fermées depuis le 12 juin 2026 à 22h00. Le tournoi commence le 13 juin."
+            "error": "Les inscriptions sont fermées depuis le 13 juin 2026 à 22h00. Le tournoi commence le 13 juin."
         }), 403
 
     try:
@@ -221,6 +220,8 @@ def register_team():
             return jsonify({"error": "Le nom du capitaine ne doit pas dépasser 80 caractères"}), 400
         if len(players) == 0:
             return jsonify({"error": "Ajoutez au moins un joueur"}), 400
+        if len(players) > 20:
+            return jsonify({"error": "Une équipe ne peut pas avoir plus de 20 joueurs"}), 400
 
         with db_conn() as conn:
             cur = get_cursor(conn)
