@@ -10,7 +10,7 @@ from flask_compress import Compress
 # If too many requests pile up, reject immediately instead of queuing and timing out.
 _active_requests = 0
 _active_lock = threading.Lock()
-MAX_CONCURRENT = 5   # 6 threads total — keep 1 free as buffer
+MAX_CONCURRENT = 9   # 10 threads total — keep 1 free as buffer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 _perf_log = logging.getLogger("perf")
