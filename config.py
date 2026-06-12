@@ -36,4 +36,4 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "")
 # --- Clôture des inscriptions ---
 # Les inscriptions ferment le 11 juin 2026 à 22h00 (heure Abidjan = UTC+0).
 # Après cette date, POST /api/register retourne 403.
-REGISTRATION_DEADLINE = datetime(2026, 6, 11, 0, 0, 0)
+REGISTRATION_DEADLINE = datetime(2026, 6, 13, 22, 0, 0)
