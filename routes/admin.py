@@ -203,6 +203,11 @@ def admin_create_match():
     if not t1 or not t2:
         return jsonify({"error": "Les noms des deux équipes sont requis"}), 400
 
+    terrain = (data.get("terrain") or "").strip() or None
+    status  = data.get("status", "upcoming")
+    if status not in ("upcoming", "ongoing", "finished"):
+        status = "upcoming"
+
     with db_conn() as conn:
         cur = get_cursor(conn)
         cur.execute(
@@ -214,11 +219,15 @@ def admin_create_match():
         if cur.fetchone():
             cur.close()
             return jsonify({"error": "Ce match existe déjà (mêmes équipes, même date et heure)"}), 409
+        # Numéro automatique : MAX existant + 1
+        cur.execute("SELECT COALESCE(MAX(match_number), 0) + 1 AS next_num FROM matches")
+        next_num = cur.fetchone()["next_num"]
         cur.execute(
             """INSERT INTO matches
-               (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, 'upcoming') RETURNING id""",
-            (data.get("team1_id"), data.get("team2_id"), t1, t2, match_date, match_time, data.get("phase", "Poule")),
+               (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status, terrain, match_number)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+            (data.get("team1_id"), data.get("team2_id"), t1, t2, match_date, match_time,
+             data.get("phase", "Poule"), status, terrain, next_num),
         )
         match_id = cur.fetchone()["id"]
         conn.commit()
@@ -234,7 +243,7 @@ def admin_update_match(match_id):
     data = request.get_json()
     fields, values = [], []
     for field in ["team1_id", "team2_id", "team1_name", "team2_name",
-                  "match_date", "match_time", "phase", "score1", "score2", "status"]:
+                  "match_date", "match_time", "phase", "score1", "score2", "status", "terrain", "match_number"]:
         if field in data:
             fields.append(f"{field} = %s")
             values.append(data[field])
