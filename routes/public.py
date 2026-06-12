@@ -6,42 +6,23 @@ import cache as _cache
 
 public_bp = Blueprint("public", __name__)
 
-# Cache mémoire pour les photos joueurs — même pattern que les logos d'équipe.
-# Évite 13 requêtes DB × N utilisateurs pour chaque page de détail.
+# Cache mémoire pour les photos joueurs — chargées à la demande, max 30 entrées.
 _player_cache: dict = {}   # {player_id: {"bytes": bytes, "mime": str} | None}
 _player_lock = threading.Lock()
+_PLAYER_CACHE_MAX = 30     # limite pour éviter la saturation mémoire
+
+
+def _player_cache_set(pid, value):
+    """Insère dans le cache photos en évictant la plus ancienne entrée si plein."""
+    with _player_lock:
+        if pid not in _player_cache and len(_player_cache) >= _PLAYER_CACHE_MAX:
+            _player_cache.pop(next(iter(_player_cache)), None)
+        _player_cache[pid] = value
 
 
 def _prewarm_player_photos():
-    """Décode et met en cache toutes les photos joueurs au démarrage du worker."""
-    try:
-        with db_conn() as conn:
-            cur = get_cursor(conn)
-            cur.execute(
-                "SELECT id, photo_path FROM players "
-                "WHERE photo_path IS NOT NULL AND photo_path != ''"
-            )
-            rows = cur.fetchall()
-            cur.close()
-        for row in rows:
-            pid = row["id"]
-            photo = row["photo_path"]
-            if photo and photo.startswith("data:"):
-                try:
-                    header, b64data = photo.split(",", 1)
-                    mime = header.split(":")[1].split(";")[0]
-                    img_bytes = base64.b64decode(b64data)
-                    with _player_lock:
-                        _player_cache[pid] = {"bytes": img_bytes, "mime": mime}
-                except Exception:
-                    with _player_lock:
-                        _player_cache[pid] = None
-            else:
-                # Chemin fichier legacy : absent sur Render éphémère
-                with _player_lock:
-                    _player_cache[pid] = None
-    except Exception:
-        pass
+    """No-op — photos chargées à la demande pour économiser la RAM au démarrage."""
+    pass
 
 
 def _strip_photos(data: dict) -> dict:
@@ -230,15 +211,13 @@ def get_player_photo(player_id):
         return "", 503
 
     if not row or not row["photo_path"]:
-        with _player_lock:
-            _player_cache[player_id] = None
+        _player_cache_set(player_id, None)
         return "", 404
 
     photo = row["photo_path"]
     if not photo.startswith("data:"):
         # Legacy fichier : absent sur Render éphémère
-        with _player_lock:
-            _player_cache[player_id] = None
+        _player_cache_set(player_id, None)
         return "", 404
 
     try:
@@ -246,12 +225,10 @@ def get_player_photo(player_id):
         mime = header.split(":")[1].split(";")[0]
         img_bytes = base64.b64decode(b64data)
         entry = {"bytes": img_bytes, "mime": mime}
-        with _player_lock:
-            _player_cache[player_id] = entry
+        _player_cache_set(player_id, entry)
         resp = Response(img_bytes, mimetype=mime)
         resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return resp
     except Exception:
-        with _player_lock:
-            _player_cache[player_id] = None
+        _player_cache_set(player_id, None)
         return "", 500

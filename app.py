@@ -10,7 +10,7 @@ from flask_compress import Compress
 # If too many requests pile up, reject immediately instead of queuing and timing out.
 _active_requests = 0
 _active_lock = threading.Lock()
-MAX_CONCURRENT = 14  # 16 threads total — keep 2 free as buffer
+MAX_CONCURRENT = 5   # 6 threads total — keep 1 free as buffer
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 _perf_log = logging.getLogger("perf")
@@ -66,22 +66,18 @@ def _prewarm_cache():
     time.sleep(2)   # Laisser gunicorn finir l'initialisation du worker
     try:
         import cache as _cache
-        from routes.teams import _fetch_teams_list, _prewarm_logos
+        from routes.teams import _fetch_teams_list
         from routes.matches import _fetch_matches, _fetch_results, _fetch_top_scorers
-        from routes.public import _fetch_gallery, _fetch_announcements, _prewarm_player_photos
+        from routes.public import _fetch_gallery, _fetch_announcements
 
-        # Utilise set() directement pour ne pas interférer avec le mécanisme
-        # inflight des routes : le pre-warmer peuple le cache sans bloquer
-        # les requêtes utilisateurs qui arriveraient pendant le chargement.
-        _cache.set("teams_list",   _fetch_teams_list(),    ttl_seconds=300)
-        _cache.set("matches_list", _fetch_matches(),       ttl_seconds=120)
-        _cache.set("results",      _fetch_results(),       ttl_seconds=120)
-        _cache.set("top_scorers",  _fetch_top_scorers(),   ttl_seconds=120)
+        # Pré-chauffe uniquement les données JSON (légères).
+        # Les images (logos/photos) sont chargées à la demande pour économiser la RAM.
+        _cache.set("teams_list",    _fetch_teams_list(),    ttl_seconds=300)
+        _cache.set("matches_list",  _fetch_matches(),       ttl_seconds=120)
+        _cache.set("results",       _fetch_results(),       ttl_seconds=120)
+        _cache.set("top_scorers",   _fetch_top_scorers(),   ttl_seconds=120)
         _cache.set("announcements", _fetch_announcements(), ttl_seconds=120)
-        _cache.set("gallery",      _fetch_gallery(),       ttl_seconds=300)
-        # Décode et cache tous les logos et photos en mémoire — zéro DB pour les images
-        _prewarm_logos()
-        _prewarm_player_photos()
+        _cache.set("gallery",       _fetch_gallery(),       ttl_seconds=300)
         logging.info("Cache pré-chargé avec succès (worker prêt)")
     except Exception as _e:
         logging.warning("Pré-chauffe cache échouée (non bloquant): %s", _e)

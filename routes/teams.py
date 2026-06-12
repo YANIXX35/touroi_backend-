@@ -12,10 +12,18 @@ from PIL import Image
 
 teams_bp = Blueprint("teams", __name__)
 
-# Cache mémoire pour les logos décodés — évite de frapper la DB pour chaque
-# requête d'image (50 users × 13 logos = 650 requêtes sinon).
+# Cache mémoire pour les logos décodés — chargés à la demande, max 25 entrées.
 _logo_cache: dict = {}   # {team_id: {"bytes": bytes, "mime": str} | None}
 _logo_lock = threading.Lock()
+_LOGO_CACHE_MAX = 25     # limite pour éviter la saturation mémoire
+
+
+def _logo_cache_set(tid, value):
+    """Insère dans le cache logos en évictant la plus ancienne entrée si plein."""
+    with _logo_lock:
+        if tid not in _logo_cache and len(_logo_cache) >= _LOGO_CACHE_MAX:
+            _logo_cache.pop(next(iter(_logo_cache)), None)
+        _logo_cache[tid] = value
 
 
 def _prewarm_logos():
@@ -121,8 +129,7 @@ def get_team_logo(team_id):
         return "", 503
 
     if not row or not row["logo_path"]:
-        with _logo_lock:
-            _logo_cache[team_id] = None
+        _logo_cache_set(team_id, None)
         return "", 404
 
     logo = row["logo_path"]
@@ -132,20 +139,17 @@ def get_team_logo(team_id):
             mime = header.split(":")[1].split(";")[0]
             img_bytes = base64.b64decode(b64data)
             entry = {"bytes": img_bytes, "mime": mime}
-            with _logo_lock:
-                _logo_cache[team_id] = entry
+            _logo_cache_set(team_id, entry)
             resp = Response(img_bytes, mimetype=mime)
         else:
             # Logo stocké comme fichier (legacy) — le fichier n'existe plus
             # sur le filesystem éphémère de Render : marquer comme absent
-            with _logo_lock:
-                _logo_cache[team_id] = None
+            _logo_cache_set(team_id, None)
             return "", 404
         resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return resp
     except Exception:
-        with _logo_lock:
-            _logo_cache[team_id] = None
+        _logo_cache_set(team_id, None)
         return "", 404
 
 
