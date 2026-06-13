@@ -342,6 +342,34 @@ def match_create_yk():
     return jsonify({"message": "Match créé", "id": match_id}), 201
 
 
+@admin_bp.route("/api/team-update-yk", methods=["POST"])
+def team_update_yk():
+    """Met à jour le nom et/ou le logo d'une équipe (clé YK, pas de JWT requis)."""
+    data = request.get_json(silent=True) or {}
+    if data.get("key") != "YK2026":
+        return jsonify({"error": "Non autorisé"}), 403
+    team_id = data.get("team_id")
+    if not team_id:
+        return jsonify({"error": "team_id requis"}), 400
+    fields, values = [], []
+    if "name" in data and data["name"]:
+        fields.append("name = %s")
+        values.append(data["name"].strip())
+    if "logo_path" in data and data["logo_path"]:
+        fields.append("logo_path = %s")
+        values.append(data["logo_path"])
+    if not fields:
+        return jsonify({"error": "Aucune donnée"}), 400
+    values.append(team_id)
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(f"UPDATE teams SET {', '.join(fields)} WHERE id = %s", values)
+        conn.commit()
+        cur.close()
+    cache_invalidate("teams_list")
+    return jsonify({"message": "Équipe mise à jour"})
+
+
 @admin_bp.route("/api/match-quick-update", methods=["POST"])
 def match_quick_update():
     data = request.get_json(silent=True) or {}
