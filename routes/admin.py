@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from database import db_conn, get_cursor
 from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS, UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
-from cache import invalidate as cache_invalidate
+from cache import invalidate as cache_invalidate, invalidate_prefix as cache_invalidate_prefix
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
@@ -185,6 +185,7 @@ def admin_update_team(team_id):
         conn.commit()
         cur.close()
     cache_invalidate("teams_list")
+    cache_invalidate_prefix("team_detail_")
     return jsonify({"message": "Équipe mise à jour"})
 
 
@@ -197,6 +198,8 @@ def admin_delete_team(team_id):
         conn.commit()
         cur.close()
     cache_invalidate("teams_list")
+    cache_invalidate_prefix("team_detail_")
+    cache_invalidate("results")
     return jsonify({"message": "Équipe supprimée"})
 
 
@@ -267,6 +270,7 @@ def admin_update_match(match_id):
         cur.close()
     cache_invalidate("matches_list")
     cache_invalidate("results")
+    cache_invalidate("top_scorers")
     return jsonify({"message": "Match mis à jour"})
 
 
@@ -399,6 +403,7 @@ def team_update_yk():
         conn.commit()
         cur.close()
     cache_invalidate("teams_list")
+    cache_invalidate_prefix("team_detail_")
     return jsonify({"message": "Équipe mise à jour"})
 
 
@@ -425,6 +430,7 @@ def match_quick_update():
         cur.close()
     cache_invalidate("matches_list")
     cache_invalidate("results")
+    cache_invalidate("top_scorers")
     return jsonify({"message": "Match mis à jour"})
 
 
@@ -452,6 +458,7 @@ def admin_add_player(team_id):
         conn.commit()
         cur.close()
     cache_invalidate("teams_list")
+    cache_invalidate_prefix("team_detail_")
     return jsonify({"id": player_id, "player_name": player_name, "photo_path": photo_path}), 201
 
 
@@ -474,6 +481,7 @@ def admin_update_player(player_id):
         conn.commit()
         cur.close()
     cache_invalidate("teams_list")
+    cache_invalidate_prefix("team_detail_")
     return jsonify({"message": "Joueur mis à jour"})
 
 
@@ -486,6 +494,7 @@ def admin_delete_player(player_id):
         conn.commit()
         cur.close()
     cache_invalidate("teams_list")
+    cache_invalidate_prefix("team_detail_")
     return jsonify({"message": "Joueur supprimé"})
 
 
@@ -546,6 +555,7 @@ def add_goal(match_id):
         conn.commit()
         cur.close()
     cache_invalidate("top_scorers")
+    cache_invalidate("results")
     return jsonify({"id": goal_id, "match_id": match_id, "player_name": player_name,
                     "team_name": team_name, "type": type_, "minute": minute}), 201
 
@@ -569,6 +579,7 @@ def update_goal(goal_id):
         conn.commit()
         cur.close()
     cache_invalidate("top_scorers")
+    cache_invalidate("results")
     return jsonify({"message": "But/Passe mis à jour"})
 
 
@@ -581,6 +592,7 @@ def delete_goal(goal_id):
         conn.commit()
         cur.close()
     cache_invalidate("top_scorers")
+    cache_invalidate("results")
     return jsonify({"message": "Supprimé"})
 
 
