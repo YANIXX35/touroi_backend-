@@ -31,6 +31,7 @@ def _fetch_results():
 
         poule_matches = [m for m in finished if m["phase"] in ("Poule", "Tour 1")]
         tour2_matches = [m for m in finished if m["phase"] == "Tour 2"]
+        tour3_matches = [m for m in finished if m["phase"] == "Tour 3"]
 
         def _entry(team_id, team_name):
             if team_id and team_id in standings_by_id:
@@ -86,6 +87,34 @@ def _fetch_results():
                 else:
                     entry["lost"] += 1
 
+        # ── Classement Tour 3 ──────────────────────────────────────────────
+        tour3_by_name: dict = {}
+        for m in tour3_matches:
+            s1, s2 = m["score1"] or 0, m["score2"] or 0
+            for team_name, gf, ga in [(m["team1_name"], s1, s2), (m["team2_name"], s2, s1)]:
+                if not team_name:
+                    continue
+                if team_name not in tour3_by_name:
+                    team_entry = standings_by_name.get(team_name)
+                    tour3_by_name[team_name] = {
+                        "id": team_entry["id"] if team_entry else 0,
+                        "name": team_name,
+                        "played": 0, "won": 0, "drawn": 0, "lost": 0,
+                        "goals_for": 0, "goals_against": 0, "points": 0,
+                    }
+                entry = tour3_by_name[team_name]
+                entry["played"] += 1
+                entry["goals_for"] += gf
+                entry["goals_against"] += ga
+                if gf > ga:
+                    entry["won"] += 1
+                    entry["points"] += 3
+                elif gf == ga:
+                    entry["drawn"] += 1
+                    entry["points"] += 1
+                else:
+                    entry["lost"] += 1
+
         cur.close()
 
     ranking = sorted(
@@ -96,10 +125,15 @@ def _fetch_results():
         tour2_by_name.values(),
         key=lambda x: (-x["points"], -(x["goals_for"] - x["goals_against"]), -x["goals_for"])
     )
+    ranking_tour3 = sorted(
+        tour3_by_name.values(),
+        key=lambda x: (-x["points"], -(x["goals_for"] - x["goals_against"]), -x["goals_for"])
+    )
     return {
         "finished_matches": [dict(m) for m in finished],
         "standings": ranking,
         "standings_tour2": list(ranking_tour2),
+        "standings_tour3": list(ranking_tour3),
     }
 
 
