@@ -342,6 +342,38 @@ def match_create_yk():
     return jsonify({"message": "Match créé", "id": match_id}), 201
 
 
+@admin_bp.route("/api/team-create-yk", methods=["POST"])
+def team_create_yk():
+    """Crée une équipe stub avec nom + logo (clé YK, pas de JWT requis)."""
+    data = request.get_json(silent=True) or {}
+    if data.get("key") != "YK2026":
+        return jsonify({"error": "Non autorisé"}), 403
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name requis"}), 400
+    logo_path = data.get("logo_path") or None
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT id FROM teams WHERE LOWER(name) = LOWER(%s)", (name,))
+        existing = cur.fetchone()
+        if existing:
+            # L'equipe existe deja : on met juste a jour le logo si fourni
+            if logo_path:
+                cur.execute("UPDATE teams SET logo_path = %s WHERE id = %s", (logo_path, existing["id"]))
+                conn.commit()
+            cur.close()
+            return jsonify({"message": "Equipe existante mise à jour", "id": existing["id"]})
+        cur.execute(
+            "INSERT INTO teams (name, captain_name, phone, logo_path, validated) VALUES (%s,%s,%s,%s,1) RETURNING id",
+            (name, "—", "0000000000", logo_path)
+        )
+        team_id = cur.fetchone()["id"]
+        conn.commit()
+        cur.close()
+    cache_invalidate("teams_list")
+    return jsonify({"message": "Equipe créée", "id": team_id}), 201
+
+
 @admin_bp.route("/api/team-update-yk", methods=["POST"])
 def team_update_yk():
     """Met à jour le nom et/ou le logo d'une équipe (clé YK, pas de JWT requis)."""
