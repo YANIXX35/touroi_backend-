@@ -134,11 +134,21 @@ def _log_perf(response):
 def add_cache_headers(response):
     if request.method == "GET" and response.status_code == 200:
         # Don't overwrite Cache-Control already set by the route (e.g. logo endpoint)
-        if "Cache-Control" not in response.headers:
-            if not request.path.startswith("/api/admin"):
-                response.headers["Cache-Control"] = "public, max-age=60"
-            else:
-                response.headers["Cache-Control"] = "no-store"
+        if "Cache-Control" in response.headers:
+            return response
+        path = request.path
+        if path.startswith("/api/admin"):
+            # Pages admin : jamais de cache
+            response.headers["Cache-Control"] = "no-store"
+        elif path.startswith("/uploads"):
+            # Fichiers binaires uploadés (logos/photos) : cache long
+            response.headers["Cache-Control"] = "public, max-age=86400"
+        elif path in ("/api/matches", "/api/results") or path.startswith("/api/goals"):
+            # Données qui changent en temps réel : ne jamais mettre en cache navigateur
+            response.headers["Cache-Control"] = "no-store"
+        else:
+            # Autres endpoints (teams, gallery, announcements) : cache court
+            response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=30"
     return response
 
 
