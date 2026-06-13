@@ -82,12 +82,26 @@ def _fetch_top_scorers():
 
         cur.execute("""
             SELECT g.id, g.match_id, g.player_name, g.team_name, g.type, g.minute,
-                   m.team1_name, m.team2_name, m.match_date, m.score1, m.score2
+                   m.team1_name, m.team2_name, m.match_date, m.score1, m.score2,
+                   p.id AS player_id,
+                   (p.photo_path IS NOT NULL AND p.photo_path != '') AS has_photo
             FROM goals g
             JOIN matches m ON m.id = g.match_id
+            LEFT JOIN players p ON LOWER(p.player_name) = LOWER(g.player_name)
+                AND p.team_id = (
+                    SELECT t.id FROM teams t
+                    WHERE LOWER(t.name) = LOWER(g.team_name)
+                    LIMIT 1
+                )
             ORDER BY m.match_date, m.match_time, g.minute
         """)
-        all_goals = [dict(r) for r in cur.fetchall()]
+        all_goals = []
+        for r in cur.fetchall():
+            row = dict(r)
+            pid = row.pop("player_id", None)
+            has_photo = row.pop("has_photo", False)
+            row["photo_url"] = f"/api/players/{pid}/photo" if pid and has_photo else None
+            all_goals.append(row)
         cur.close()
 
     return {
