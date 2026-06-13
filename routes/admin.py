@@ -305,6 +305,43 @@ def bulk_status_update():
     return jsonify({"message": f"{count} matchs mis à jour", "count": count})
 
 
+@admin_bp.route("/api/match-create-yk", methods=["POST"])
+def match_create_yk():
+    data = request.get_json(silent=True) or {}
+    if data.get("key") != "YK2026":
+        return jsonify({"error": "Non autorisé"}), 403
+    t1_name = (data.get("team1_name") or "").strip()
+    t2_name = (data.get("team2_name") or "").strip()
+    if not t1_name or not t2_name:
+        return jsonify({"error": "Équipes requises"}), 400
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("SELECT id FROM teams WHERE LOWER(name) = LOWER(%s)", (t1_name,))
+        t1 = cur.fetchone()
+        cur.execute("SELECT id FROM teams WHERE LOWER(name) = LOWER(%s)", (t2_name,))
+        t2 = cur.fetchone()
+        cur.execute("SELECT COALESCE(MAX(match_number), 0) + 1 AS next_num FROM matches")
+        next_num = cur.fetchone()["next_num"]
+        cur.execute(
+            """INSERT INTO matches
+               (team1_id, team2_id, team1_name, team2_name, match_date, match_time, phase, status, terrain, match_number)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,'upcoming',%s,%s) RETURNING id""",
+            (t1["id"] if t1 else None, t2["id"] if t2 else None,
+             t1_name, t2_name,
+             data.get("match_date") or None,
+             data.get("match_time") or None,
+             data.get("phase", "Tour 2"),
+             data.get("terrain") or None,
+             next_num)
+        )
+        match_id = cur.fetchone()["id"]
+        conn.commit()
+        cur.close()
+    cache_invalidate("matches_list")
+    cache_invalidate("results")
+    return jsonify({"message": "Match créé", "id": match_id}), 201
+
+
 @admin_bp.route("/api/match-quick-update", methods=["POST"])
 def match_quick_update():
     data = request.get_json(silent=True) or {}
