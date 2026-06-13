@@ -284,6 +284,27 @@ def admin_delete_match(match_id):
     return jsonify({"message": "Match supprimé"})
 
 
+# ─── Bulk status (page secrète /yk) ───────────────────────────────────────────
+
+@admin_bp.route("/api/bulk-status", methods=["POST"])
+def bulk_status_update():
+    data = request.get_json(silent=True) or {}
+    if data.get("key") != "YK2026":
+        return jsonify({"error": "Non autorisé"}), 403
+    status = data.get("status")
+    if status not in ("upcoming", "ongoing", "finished"):
+        return jsonify({"error": "Statut invalide"}), 400
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("UPDATE matches SET status = %s", (status,))
+        count = cur.rowcount
+        conn.commit()
+        cur.close()
+    cache_invalidate("matches_list")
+    cache_invalidate("results")
+    return jsonify({"message": f"{count} matchs mis à jour", "count": count})
+
+
 # ─── Joueurs ───────────────────────────────────────────────────────────────────
 
 def _allowed_photo(filename: str) -> bool:
