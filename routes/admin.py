@@ -305,6 +305,32 @@ def bulk_status_update():
     return jsonify({"message": f"{count} matchs mis à jour", "count": count})
 
 
+@admin_bp.route("/api/match-quick-update", methods=["POST"])
+def match_quick_update():
+    data = request.get_json(silent=True) or {}
+    if data.get("key") != "YK2026":
+        return jsonify({"error": "Non autorisé"}), 403
+    match_id = data.get("match_id")
+    if not match_id:
+        return jsonify({"error": "match_id requis"}), 400
+    fields, values = [], []
+    for field in ["score1", "score2", "status"]:
+        if field in data:
+            fields.append(f"{field} = %s")
+            values.append(data[field])
+    if not fields:
+        return jsonify({"error": "Aucune donnée"}), 400
+    values.append(match_id)
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(f"UPDATE matches SET {', '.join(fields)} WHERE id = %s", values)
+        conn.commit()
+        cur.close()
+    cache_invalidate("matches_list")
+    cache_invalidate("results")
+    return jsonify({"message": "Match mis à jour"})
+
+
 # ─── Joueurs ───────────────────────────────────────────────────────────────────
 
 def _allowed_photo(filename: str) -> bool:
