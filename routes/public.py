@@ -161,7 +161,7 @@ def get_gallery():
 @public_bp.route("/api/announcements", methods=["GET"])
 def get_announcements():
     try:
-        result = _cache.get_or_compute("announcements", _fetch_announcements, ttl_seconds=120)
+        result = _cache.get_or_compute("announcements", _fetch_announcements, ttl_seconds=600)
         if result is None:
             return jsonify({"error": "Service temporairement indisponible"}), 503
         return jsonify(result)
@@ -176,7 +176,7 @@ def get_team_detail(team_id):
         result = _cache.get_or_compute(
             f"team_detail_{team_id}",
             lambda: _fetch_team_detail(team_id),
-            ttl_seconds=120,
+            ttl_seconds=600,
         )
         if result is None:
             return jsonify({"error": "Service temporairement indisponible"}), 503

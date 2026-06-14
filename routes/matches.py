@@ -184,7 +184,7 @@ def _fetch_top_scorers():
 @matches_bp.route("/api/matches", methods=["GET"])
 def get_matches():
     try:
-        result = _cache.get_or_compute("matches_list", _fetch_matches, ttl_seconds=120)
+        result = _cache.get_or_compute("matches_list", _fetch_matches, ttl_seconds=600)
         if result is None:
             return jsonify({"error": "Service temporairement indisponible"}), 503
         return jsonify(result)
@@ -195,7 +195,7 @@ def get_matches():
 @matches_bp.route("/api/results", methods=["GET"])
 def get_results():
     try:
-        result = _cache.get_or_compute("results", _fetch_results, ttl_seconds=120)
+        result = _cache.get_or_compute("results", _fetch_results, ttl_seconds=600)
         if result is None:
             return jsonify({"error": "Service temporairement indisponible"}), 503
         return jsonify(result)
@@ -206,7 +206,7 @@ def get_results():
 @matches_bp.route("/api/goals", methods=["GET"])
 def get_top_scorers():
     try:
-        result = _cache.get_or_compute("top_scorers", _fetch_top_scorers, ttl_seconds=120)
+        result = _cache.get_or_compute("top_scorers", _fetch_top_scorers, ttl_seconds=600)
         if result is None:
             return jsonify({"error": "Service temporairement indisponible"}), 503
         return jsonify(result)
