@@ -72,12 +72,12 @@ def _prewarm_cache():
 
         # Pré-chauffe uniquement les données JSON (légères).
         # Les images (logos/photos) sont chargées à la demande pour économiser la RAM.
-        _cache.set("teams_list",    _fetch_teams_list(),    ttl_seconds=300)
-        _cache.set("matches_list",  _fetch_matches(),       ttl_seconds=120)
-        _cache.set("results",       _fetch_results(),       ttl_seconds=120)
-        _cache.set("top_scorers",   _fetch_top_scorers(),   ttl_seconds=120)
-        _cache.set("announcements", _fetch_announcements(), ttl_seconds=120)
-        _cache.set("gallery",       _fetch_gallery(),       ttl_seconds=300)
+        _cache.set("teams_list",    _fetch_teams_list(),    ttl_seconds=600)
+        _cache.set("matches_list",  _fetch_matches(),       ttl_seconds=600)
+        _cache.set("results",       _fetch_results(),       ttl_seconds=600)
+        _cache.set("top_scorers",   _fetch_top_scorers(),   ttl_seconds=600)
+        _cache.set("announcements", _fetch_announcements(), ttl_seconds=600)
+        _cache.set("gallery",       _fetch_gallery(),       ttl_seconds=600)
         logging.info("Cache pré-chargé avec succès (worker prêt)")
     except Exception as _e:
         logging.warning("Pré-chauffe cache échouée (non bloquant): %s", _e)
@@ -149,6 +149,21 @@ def add_cache_headers(response):
         else:
             # Autres endpoints (teams, gallery, announcements) : cache court
             response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=30"
+    return response
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+    if not request.path.startswith("/uploads"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; "
+            "frame-ancestors 'none'"
+        )
     return response
 
 

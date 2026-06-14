@@ -4,6 +4,7 @@ from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS, UPLOAD_FOLDER, ALLOWED_
 from cache import invalidate as cache_invalidate, invalidate_prefix as cache_invalidate_prefix
 import bcrypt
 import jwt
+import logging
 from datetime import datetime, timedelta
 from functools import wraps
 from threading import Lock
@@ -12,40 +13,92 @@ import io
 import base64
 
 admin_bp = Blueprint("admin", __name__)
+_rl_logger = logging.getLogger("rate_limit")
 
-# ─── Rate limiting ─────────────────────────────────────────────────────────────
-_attempts: dict = {}
-_lock = Lock()
+# ─── Rate limiting login (DB — partagé entre tous les workers) ─────────────────
 _MAX_ATTEMPTS = 5
 _LOCKOUT_MINUTES = 15
 
 
 def _check_rate_limit(ip: str):
-    with _lock:
-        now = datetime.utcnow()
-        entry = _attempts.get(ip)
-        if entry:
-            locked_until = entry.get("locked_until")
-            if locked_until and now < locked_until:
+    """Vérifie le rate limit depuis la DB (cross-workers)."""
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("SELECT attempts, locked_until FROM rate_limits WHERE ip = %s", (ip,))
+            row = cur.fetchone()
+            cur.close()
+        if not row:
+            return True, ""
+        locked_until = row["locked_until"]
+        if locked_until:
+            now = datetime.utcnow().replace(tzinfo=locked_until.tzinfo)
+            if now < locked_until:
                 remaining = int((locked_until - now).total_seconds() / 60) + 1
                 return False, f"Trop de tentatives. Réessayez dans {remaining} minute(s)."
-            if locked_until and now >= locked_until:
-                _attempts[ip] = {"count": 0, "locked_until": None}
+        return True, ""
+    except Exception as e:
+        _rl_logger.warning("rate_limit check error: %s", e)
         return True, ""
 
 
 def _record_failure(ip: str):
-    with _lock:
-        now = datetime.utcnow()
-        entry = _attempts.get(ip, {"count": 0, "locked_until": None})
-        count = entry["count"] + 1
-        locked_until = now + timedelta(minutes=_LOCKOUT_MINUTES) if count >= _MAX_ATTEMPTS else None
-        _attempts[ip] = {"count": count, "locked_until": locked_until}
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("SELECT attempts, locked_until FROM rate_limits WHERE ip = %s", (ip,))
+            row = cur.fetchone()
+            now = datetime.utcnow()
+            if row:
+                lu = row["locked_until"]
+                if lu and lu.replace(tzinfo=None) <= now:
+                    new_count = 1
+                    locked_until = None
+                else:
+                    new_count = (row["attempts"] or 0) + 1
+                    locked_until = (now + timedelta(minutes=_LOCKOUT_MINUTES)) if new_count >= _MAX_ATTEMPTS else None
+                cur.execute(
+                    "UPDATE rate_limits SET attempts=%s, locked_until=%s, last_attempt=NOW() WHERE ip=%s",
+                    (new_count, locked_until, ip)
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO rate_limits (ip, attempts, locked_until) VALUES (%s, 1, NULL)",
+                    (ip,)
+                )
+            conn.commit()
+            cur.close()
+    except Exception as e:
+        _rl_logger.warning("rate_limit record error: %s", e)
 
 
 def _clear_attempts(ip: str):
-    with _lock:
-        _attempts.pop(ip, None)
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute("DELETE FROM rate_limits WHERE ip = %s", (ip,))
+            conn.commit()
+            cur.close()
+    except Exception as e:
+        _rl_logger.warning("rate_limit clear error: %s", e)
+
+
+# ─── Rate limiting endpoints YK (sliding window, in-memory) ───────────────────
+_yk_requests: dict = {}
+_yk_lock = Lock()
+_YK_MAX_PER_MINUTE = 30
+
+
+def _check_yk_rate_limit(ip: str):
+    with _yk_lock:
+        now = datetime.utcnow()
+        cutoff = now - timedelta(minutes=1)
+        timestamps = [t for t in _yk_requests.get(ip, []) if t > cutoff]
+        if len(timestamps) >= _YK_MAX_PER_MINUTE:
+            return False, "Trop de requêtes. Réessayez dans une minute."
+        timestamps.append(now)
+        _yk_requests[ip] = timestamps
+        return True, ""
 
 
 # ─── JWT auth decorator ────────────────────────────────────────────────────────
@@ -292,6 +345,10 @@ def admin_delete_match(match_id):
 
 @admin_bp.route("/api/bulk-status", methods=["POST"])
 def bulk_status_update():
+    ip = request.remote_addr or "unknown"
+    allowed, err = _check_yk_rate_limit(ip)
+    if not allowed:
+        return jsonify({"error": err}), 429
     data = request.get_json(silent=True) or {}
     if data.get("key") != "YK2026":
         return jsonify({"error": "Non autorisé"}), 403
@@ -311,6 +368,10 @@ def bulk_status_update():
 
 @admin_bp.route("/api/match-create-yk", methods=["POST"])
 def match_create_yk():
+    ip = request.remote_addr or "unknown"
+    allowed, err = _check_yk_rate_limit(ip)
+    if not allowed:
+        return jsonify({"error": err}), 429
     data = request.get_json(silent=True) or {}
     if data.get("key") != "YK2026":
         return jsonify({"error": "Non autorisé"}), 403
@@ -349,6 +410,10 @@ def match_create_yk():
 @admin_bp.route("/api/team-create-yk", methods=["POST"])
 def team_create_yk():
     """Crée une équipe stub avec nom + logo (clé YK, pas de JWT requis)."""
+    ip = request.remote_addr or "unknown"
+    allowed, err = _check_yk_rate_limit(ip)
+    if not allowed:
+        return jsonify({"error": err}), 429
     data = request.get_json(silent=True) or {}
     if data.get("key") != "YK2026":
         return jsonify({"error": "Non autorisé"}), 403
@@ -381,6 +446,10 @@ def team_create_yk():
 @admin_bp.route("/api/team-update-yk", methods=["POST"])
 def team_update_yk():
     """Met à jour le nom et/ou le logo d'une équipe (clé YK, pas de JWT requis)."""
+    ip = request.remote_addr or "unknown"
+    allowed, err = _check_yk_rate_limit(ip)
+    if not allowed:
+        return jsonify({"error": err}), 429
     data = request.get_json(silent=True) or {}
     if data.get("key") != "YK2026":
         return jsonify({"error": "Non autorisé"}), 403
@@ -409,6 +478,10 @@ def team_update_yk():
 
 @admin_bp.route("/api/match-quick-update", methods=["POST"])
 def match_quick_update():
+    ip = request.remote_addr or "unknown"
+    allowed, err = _check_yk_rate_limit(ip)
+    if not allowed:
+        return jsonify({"error": err}), 429
     data = request.get_json(silent=True) or {}
     if data.get("key") != "YK2026":
         return jsonify({"error": "Non autorisé"}), 403
@@ -517,7 +590,8 @@ def admin_upload_photo():
         data_url = "data:image/webp;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
         return jsonify({"photo_path": data_url}), 201
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logging.getLogger("admin").error("upload_photo error: %s", e)
+        return jsonify({"error": "Erreur lors du traitement de l'image"}), 500
 
 
 # ─── Buteurs & Passeurs ────────────────────────────────────────────────────────

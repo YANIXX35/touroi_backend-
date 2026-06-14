@@ -6,7 +6,7 @@ from datetime import datetime
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "tournoi-eglise-secret-key-2024-secure!")
 if not os.environ.get("JWT_SECRET_KEY"):
     logging.warning("⚠️  JWT_SECRET_KEY non définie — clé par défaut utilisée (INSÉCURISÉ en prod)")
-JWT_EXPIRATION_HOURS = int(os.environ.get("JWT_EXPIRATION_HOURS", "24"))
+JWT_EXPIRATION_HOURS = int(os.environ.get("JWT_EXPIRATION_HOURS", "8"))
 
 # --- Gmail SMTP ---
 GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "votre.email@gmail.com")

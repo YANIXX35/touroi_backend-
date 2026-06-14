@@ -186,6 +186,15 @@ def init_db():
             )
         """)
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                ip TEXT PRIMARY KEY,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until TIMESTAMPTZ,
+                last_attempt TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
         cur.execute("CREATE INDEX IF NOT EXISTS idx_gallery_created ON gallery(created_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(active)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created_at DESC)")
