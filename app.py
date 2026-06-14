@@ -20,6 +20,7 @@ from routes.teams import teams_bp
 from routes.matches import matches_bp
 from routes.admin import admin_bp
 from routes.public import public_bp
+from routes.chat import chat_bp
 from config import UPLOAD_FOLDER, FRONTEND_URL
 
 app = Flask(__name__)
@@ -51,6 +52,7 @@ app.register_blueprint(teams_bp)
 app.register_blueprint(matches_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(public_bp)
+app.register_blueprint(chat_bp)
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 try:
