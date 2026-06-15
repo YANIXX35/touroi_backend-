@@ -1,7 +1,46 @@
 from flask import Blueprint, request, jsonify
 from database import db_conn, get_cursor
+import os
 
 mvp_bp = Blueprint("mvp", __name__)
+
+# ─── Candidats fixes : les 4 capitaines des demi-finalistes ──────────────────
+API_BASE = os.environ.get("API_BASE_URL", "https://touroi-backend.onrender.com")
+
+CANDIDATES = [
+    {
+        "player_id":   412,
+        "player_name": "Mohamed",
+        "team_name":   "Futur Pro",
+        "role":        "Capitaine",
+        "photo_url":   f"{API_BASE}/api/players/412/photo",
+    },
+    {
+        "player_id":   703,
+        "player_name": "Gnombre Élise",
+        "team_name":   "Universel Foot",
+        "role":        "Capitaine",
+        "photo_url":   f"{API_BASE}/api/players/703/photo",
+    },
+    {
+        "player_id":   678,
+        "player_name": "JEREMIE",
+        "team_name":   "Les Enfants s'Amusent",
+        "role":        "Capitaine",
+        "photo_url":   f"{API_BASE}/api/players/678/photo",
+    },
+    {
+        "player_id":   563,
+        "player_name": "OUDRAOGO Ousmane",
+        "team_name":   "FC Colombie",
+        "role":        "Capitaine",
+        "photo_url":   f"{API_BASE}/api/players/563/photo",
+    },
+]
+
+_VALID_KEYS = {
+    (c["player_name"].lower(), c["team_name"].lower()) for c in CANDIDATES
+}
 
 
 @mvp_bp.route("/api/mvp", methods=["GET"])
@@ -11,26 +50,15 @@ def get_mvp():
     with db_conn() as conn:
         cur = get_cursor(conn)
 
-        # Candidats = tous les joueurs ayant marqué un but, avec leur nb de votes
+        # Nombre de votes par candidat
         cur.execute("""
-            SELECT
-                g.player_name,
-                g.team_name,
-                COUNT(g.id)              AS goals,
-                COALESCE(v.vote_count, 0) AS votes
-            FROM goals g
-            LEFT JOIN (
-                SELECT LOWER(player_name) AS pn, LOWER(team_name) AS tn, COUNT(*) AS vote_count
-                FROM mvp_votes
-                GROUP BY LOWER(player_name), LOWER(team_name)
-            ) v ON LOWER(g.player_name) = v.pn AND LOWER(g.team_name) = v.tn
-            WHERE g.type = 'goal'
-            GROUP BY g.player_name, g.team_name, v.vote_count
-            ORDER BY votes DESC, goals DESC
+            SELECT LOWER(player_name) AS pn, LOWER(team_name) AS tn, COUNT(*) AS cnt
+            FROM mvp_votes
+            GROUP BY LOWER(player_name), LOWER(team_name)
         """)
-        candidates = [dict(r) for r in cur.fetchall()]
+        vote_map = {(r["pn"], r["tn"]): int(r["cnt"]) for r in cur.fetchall()}
 
-        # L'IP a-t-elle déjà voté ?
+        # Vote de cet IP
         cur.execute(
             "SELECT player_name, team_name FROM mvp_votes WHERE voter_ip = %s",
             (voter_ip,),
@@ -38,14 +66,19 @@ def get_mvp():
         voted_row = cur.fetchone()
         cur.close()
 
-    total_votes = sum(c["votes"] for c in candidates)
-    for c in candidates:
-        c["percentage"] = round((c["votes"] / total_votes * 100) if total_votes else 0, 1)
-        c["goals"] = int(c["goals"])
-        c["votes"] = int(c["votes"])
+    total_votes = sum(vote_map.values())
+
+    result = []
+    for c in CANDIDATES:
+        key    = (c["player_name"].lower(), c["team_name"].lower())
+        votes  = vote_map.get(key, 0)
+        pct    = round((votes / total_votes * 100) if total_votes else 0, 1)
+        result.append({**c, "votes": votes, "percentage": pct})
+
+    result.sort(key=lambda x: x["votes"], reverse=True)
 
     return jsonify({
-        "candidates":  candidates,
+        "candidates":  result,
         "total_votes": total_votes,
         "user_voted":  voted_row is not None,
         "user_vote":   dict(voted_row) if voted_row else None,
@@ -60,29 +93,18 @@ def cast_vote():
     team_name   = (data.get("team_name")   or "").strip()
 
     if not player_name or not team_name:
-        return jsonify({"error": "Joueur invalide"}), 400
+        return jsonify({"error": "Candidat invalide"}), 400
+
+    if (player_name.lower(), team_name.lower()) not in _VALID_KEYS:
+        return jsonify({"error": "Ce joueur ne fait pas partie des candidats MVP"}), 400
 
     with db_conn() as conn:
         cur = get_cursor(conn)
 
-        # Déjà voté ?
         cur.execute("SELECT id FROM mvp_votes WHERE voter_ip = %s", (voter_ip,))
         if cur.fetchone():
             cur.close()
             return jsonify({"error": "Vous avez déjà voté !"}), 409
-
-        # Le joueur existe bien dans les buts ?
-        cur.execute(
-            """SELECT COUNT(*) AS cnt FROM goals
-               WHERE LOWER(player_name) = LOWER(%s)
-                 AND LOWER(team_name)   = LOWER(%s)
-                 AND type = 'goal'""",
-            (player_name, team_name),
-        )
-        row = cur.fetchone()
-        if not row or int(row["cnt"]) == 0:
-            cur.close()
-            return jsonify({"error": "Joueur introuvable parmi les buteurs"}), 404
 
         cur.execute(
             "INSERT INTO mvp_votes (player_name, team_name, voter_ip) VALUES (%s, %s, %s)",
