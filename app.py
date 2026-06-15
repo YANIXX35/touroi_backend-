@@ -47,7 +47,7 @@ CORS(
 )
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024  # 60 MB (photos + vidéos locales)
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024  # 20 MB max (photos seulement — vidéos via Cloudinary)
 
 app.register_blueprint(teams_bp)
 app.register_blueprint(matches_bp)

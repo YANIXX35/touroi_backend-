@@ -720,7 +720,7 @@ def admin_add_photo():
     photo_path = (data.get("photo_path") or "").strip()
     title = (data.get("title") or "").strip()
     media_type = (data.get("media_type") or "photo").strip()
-    if media_type not in ("photo", "video"):
+    if media_type not in ("photo", "video", "cloudinary_video"):
         media_type = "photo"
     if not photo_path:
         return jsonify({"error": "Contenu requis"}), 400
