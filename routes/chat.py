@@ -10,9 +10,8 @@ from threading import Lock, Semaphore
 chat_bp = Blueprint("chat", __name__)
 _logger = logging.getLogger("chat")
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL   = "gemini-2.5-flash"
-GEMINI_URL     = (
+GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_URL   = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
 )
@@ -30,15 +29,59 @@ Ce que tu sais sur le tournoi :
 
 Garde tes réponses concises (3-5 phrases max). Utilise des emojis avec modération."""
 
+# ─── Rotation de clés Gemini ──────────────────────────────────────────────────
+# Charge toutes les clés disponibles (GEMINI_API_KEY_1 … _5, ou GEMINI_API_KEY)
+def _load_keys() -> list[str]:
+    keys = []
+    for i in range(1, 6):
+        k = os.environ.get(f"GEMINI_API_KEY_{i}", "").strip()
+        if k:
+            keys.append(k)
+    if not keys:
+        # compatibilité avec l'ancienne variable
+        k = os.environ.get("GEMINI_API_KEY", "").strip()
+        if k:
+            keys.append(k)
+    return keys
+
+GEMINI_KEYS: list[str] = _load_keys()
+
+_key_lock      = Lock()
+_key_cooldowns: dict[int, datetime] = {}   # idx → cooldown_until
+_key_cursor    = 0                          # dernier index utilisé
+
+
+def _get_available_key() -> tuple[int, str] | tuple[None, None]:
+    """Retourne (index, clé) d'une clé disponible, ou (None, None) si toutes épuisées."""
+    global _key_cursor
+    with _key_lock:
+        now = datetime.utcnow()
+        n   = len(GEMINI_KEYS)
+        for offset in range(n):
+            idx = (_key_cursor + offset) % n
+            cd  = _key_cooldowns.get(idx)
+            if cd is None or now >= cd:
+                _key_cursor = (idx + 1) % n
+                return idx, GEMINI_KEYS[idx]
+        return None, None
+
+
+def _mark_key_exhausted(idx: int) -> None:
+    """Met la clé en cooldown 62 secondes (légèrement > 1 min de quota Gemini)."""
+    with _key_lock:
+        _key_cooldowns[idx] = datetime.utcnow() + timedelta(seconds=62)
+        _logger.warning("Clé Gemini #%d mise en cooldown 62s", idx)
+
+
 # ─── Rate limiting par IP (sliding window) ────────────────────────────────────
 _requests: dict = {}
 _lock = Lock()
-_MAX_PER_MINUTE = 8          # messages max par utilisateur par minute
+_MAX_PER_MINUTE = 8
 
 
 def _check_rate_limit(ip: str) -> tuple[bool, str]:
     with _lock:
-        now = datetime.utcnow()
+        now    = datetime.utcnow()
         cutoff = now - timedelta(minutes=1)
         timestamps = [t for t in _requests.get(ip, []) if t > cutoff]
         if len(timestamps) >= _MAX_PER_MINUTE:
@@ -47,19 +90,18 @@ def _check_rate_limit(ip: str) -> tuple[bool, str]:
         _requests[ip] = timestamps
         return True, ""
 
-# ─── Sémaphore global — limite les appels Gemini simultanés ──────────────────
-# Gemini accepte ~10 requêtes parallèles ; on prend 6 pour rester confortable.
-# Les requêtes en excès attendent max 12s avant de recevoir un message d'attente.
-_gemini_sem = Semaphore(6)
-_SEM_TIMEOUT = 12   # secondes max d'attente en file
+
+# ─── Sémaphore global ─────────────────────────────────────────────────────────
+_gemini_sem = Semaphore(10)   # jusqu'à 10 appels Gemini simultanés (1 par clé)
+_SEM_TIMEOUT = 15
 
 
 # ─── Route ────────────────────────────────────────────────────────────────────
 
 @chat_bp.route("/api/chat", methods=["POST"])
 def chat():
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "Assistant non configuré"}), 503
+    if not GEMINI_KEYS:
+        return jsonify({"error": "Assistant non configuré (aucune clé API)"}), 503
 
     ip = request.remote_addr or "unknown"
     allowed, err = _check_rate_limit(ip)
@@ -93,43 +135,69 @@ def chat():
         },
     }
 
-    # ── File d'attente : on attend un slot disponible vers Gemini ────────────
+    # ── File d'attente ────────────────────────────────────────────────────────
     acquired = _gemini_sem.acquire(blocking=True, timeout=_SEM_TIMEOUT)
     if not acquired:
-        _logger.warning("Semaphore timeout for IP %s", ip)
         return jsonify({
             "error": "L'assistant est très sollicité en ce moment. Réessayez dans quelques secondes 🙏"
         }), 503
 
     try:
         body = json.dumps(payload).encode("utf-8")
-        req  = urllib.request.Request(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
 
-        candidates = result.get("candidates", [])
-        if not candidates:
-            _logger.warning("Gemini: no candidates in response")
-            return jsonify({"error": "Aucune réponse générée"}), 502
+        # ── Rotation automatique des clés ─────────────────────────────────────
+        # On essaie toutes les clés disponibles avant d'abandonner
+        last_error = None
+        for _attempt in range(len(GEMINI_KEYS)):
+            key_idx, api_key = _get_available_key()
+            if api_key is None:
+                return jsonify({
+                    "error": "L'assistant est momentanément surchargé. Réessayez dans une minute ⏳"
+                }), 503
 
-        text = candidates[0]["content"]["parts"][0]["text"]
-        return jsonify({"reply": text.strip()})
+            req = urllib.request.Request(
+                f"{GEMINI_URL}?key={api_key}",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=25) as resp:
+                    result = json.loads(resp.read().decode("utf-8"))
 
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="replace")
-        _logger.error("Gemini HTTP %d: %s", e.code, raw[:300])
-        if e.code == 429:
-            return jsonify({"error": "L'assistant est momentanément surchargé. Réessayez dans quelques secondes."}), 429
-        if e.code in (400, 401, 403):
-            return jsonify({"error": "Clé API invalide ou non autorisée."}), 502
+                candidates = result.get("candidates", [])
+                if not candidates:
+                    _logger.warning("Gemini clé #%d : aucun candidat", key_idx)
+                    return jsonify({"error": "Aucune réponse générée"}), 502
+
+                text = candidates[0]["content"]["parts"][0]["text"]
+                return jsonify({"reply": text.strip()})
+
+            except urllib.error.HTTPError as e:
+                raw = e.read().decode("utf-8", errors="replace")
+                _logger.error("Gemini clé #%d HTTP %d: %s", key_idx, e.code, raw[:200])
+
+                if e.code == 429:
+                    # Cette clé est épuisée → cooldown et on essaie la suivante
+                    _mark_key_exhausted(key_idx)
+                    last_error = "429"
+                    continue   # prochain tour de boucle = prochaine clé
+
+                if e.code in (400, 401, 403):
+                    return jsonify({"error": "Clé API invalide ou non autorisée."}), 502
+                return jsonify({"error": "Assistant temporairement indisponible"}), 502
+
+            except Exception as e:
+                _logger.error("Gemini clé #%d erreur: %s", key_idx, e)
+                last_error = str(e)
+                break
+
+        # Toutes les clés ont renvoyé 429
+        if last_error == "429":
+            return jsonify({
+                "error": "L'assistant est momentanément surchargé. Réessayez dans une minute ⏳"
+            }), 503
         return jsonify({"error": "Assistant temporairement indisponible"}), 502
-    except Exception as e:
-        _logger.error("Gemini error: %s", e)
-        return jsonify({"error": "Assistant temporairement indisponible"}), 502
+
     finally:
-        _gemini_sem.release()   # libère le slot même en cas d'erreur
+        _gemini_sem.release()

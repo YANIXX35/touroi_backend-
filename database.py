@@ -202,6 +202,18 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_matches_team2_lower ON matches(LOWER(team2_name))")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_goals_team_lower ON goals(LOWER(team_name))")
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS mvp_votes (
+                id SERIAL PRIMARY KEY,
+                player_name TEXT NOT NULL,
+                team_name TEXT NOT NULL,
+                voter_ip TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(voter_ip)
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_mvp_votes_ip ON mvp_votes(voter_ip)")
+
         cur.execute("SELECT id FROM admins WHERE username = %s", (ADMIN_USERNAME,))
         if not cur.fetchone():
             password_hash = bcrypt.hashpw(
