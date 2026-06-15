@@ -705,8 +705,9 @@ def _log(action: str, details: str = ""):
 def admin_get_gallery():
     with db_conn() as conn:
         cur = get_cursor(conn)
-        cur.execute("SELECT id, title, photo_path, created_at FROM gallery ORDER BY created_at DESC")
+        cur.execute("SELECT id, title, photo_path, media_type, created_at FROM gallery ORDER BY created_at DESC")
         rows = [{"id": r["id"], "title": r["title"], "photo_path": r["photo_path"],
+                 "media_type": r["media_type"] or "photo",
                  "created_at": str(r["created_at"])} for r in cur.fetchall()]
         cur.close()
     return jsonify(rows)
@@ -718,21 +719,24 @@ def admin_add_photo():
     data = request.get_json() or {}
     photo_path = (data.get("photo_path") or "").strip()
     title = (data.get("title") or "").strip()
+    media_type = (data.get("media_type") or "photo").strip()
+    if media_type not in ("photo", "video"):
+        media_type = "photo"
     if not photo_path:
-        return jsonify({"error": "Photo requise"}), 400
+        return jsonify({"error": "Contenu requis"}), 400
     with db_conn() as conn:
         cur = get_cursor(conn)
         cur.execute(
-            "INSERT INTO gallery (title, photo_path) VALUES (%s, %s) RETURNING id, created_at",
-            (title or None, photo_path)
+            "INSERT INTO gallery (title, photo_path, media_type) VALUES (%s, %s, %s) RETURNING id, created_at",
+            (title or None, photo_path, media_type)
         )
         row = cur.fetchone()
         conn.commit()
         cur.close()
     cache_invalidate("gallery")
-    _log("gallery_add", title or "sans titre")
+    _log("gallery_add", f"[{media_type}] {title or 'sans titre'}")
     return jsonify({"id": row["id"], "title": title, "photo_path": photo_path,
-                    "created_at": str(row["created_at"])}), 201
+                    "media_type": media_type, "created_at": str(row["created_at"])}), 201
 
 
 @admin_bp.route("/api/admin/gallery/<int:photo_id>", methods=["PATCH"])

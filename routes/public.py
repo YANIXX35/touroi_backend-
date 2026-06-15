@@ -38,8 +38,9 @@ def _strip_photos(data: dict) -> dict:
 def _fetch_gallery():
     with db_conn() as conn:
         cur = get_cursor(conn)
-        cur.execute("SELECT id, title, photo_path, created_at FROM gallery ORDER BY created_at DESC")
+        cur.execute("SELECT id, title, photo_path, media_type, created_at FROM gallery ORDER BY created_at DESC")
         result = [{"id": r["id"], "title": r["title"], "photo_path": r["photo_path"],
+                   "media_type": r["media_type"] or "photo",
                    "created_at": str(r["created_at"])} for r in cur.fetchall()]
         cur.close()
     return result

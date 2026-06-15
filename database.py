@@ -161,9 +161,11 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 title TEXT,
                 photo_path TEXT NOT NULL,
+                media_type TEXT NOT NULL DEFAULT 'photo',
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
+        cur.execute("ALTER TABLE gallery ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'photo'")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS announcements (
