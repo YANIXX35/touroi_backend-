@@ -739,6 +739,45 @@ def admin_add_photo():
                     "media_type": media_type, "created_at": str(row["created_at"])}), 201
 
 
+@admin_bp.route("/api/admin/gallery/upload-video", methods=["POST"])
+@token_required
+def admin_upload_video():
+    import psycopg2
+    title = (request.form.get("title") or "").strip() or None
+    if "video" not in request.files:
+        return jsonify({"error": "Pas de fichier vidéo"}), 400
+    file = request.files["video"]
+    if not file or not file.filename:
+        return jsonify({"error": "Fichier invalide"}), 400
+    video_data = file.read()
+    if not video_data:
+        return jsonify({"error": "Fichier vide"}), 400
+    content_type = file.content_type or "video/mp4"
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute(
+            "INSERT INTO gallery (title, photo_path, media_type) VALUES (%s, %s, 'local_video') RETURNING id, created_at",
+            (title, "")
+        )
+        row = cur.fetchone()
+        gid = row["id"]
+        cur.execute("UPDATE gallery SET photo_path = %s WHERE id = %s", (f"/api/video/{gid}", gid))
+        cur.execute(
+            "INSERT INTO gallery_videos (id, video_data, content_type) VALUES (%s, %s, %s)",
+            (gid, psycopg2.Binary(video_data), content_type)
+        )
+        conn.commit()
+        cur.close()
+    cache_invalidate("gallery")
+    _log("gallery_add_video", f"[local_video] {title or 'sans titre'} ({len(video_data)//1024} KB)")
+    return jsonify({
+        "id": gid, "title": title,
+        "photo_path": f"/api/video/{gid}",
+        "media_type": "local_video",
+        "created_at": str(row["created_at"])
+    }), 201
+
+
 @admin_bp.route("/api/admin/gallery/<int:photo_id>", methods=["PATCH"])
 @token_required
 def admin_update_photo(photo_id):

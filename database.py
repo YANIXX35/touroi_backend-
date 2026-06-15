@@ -197,6 +197,14 @@ def init_db():
             )
         """)
 
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS gallery_videos (
+                id INTEGER PRIMARY KEY REFERENCES gallery(id) ON DELETE CASCADE,
+                video_data BYTEA NOT NULL,
+                content_type TEXT NOT NULL DEFAULT 'video/mp4'
+            )
+        """)
+
         cur.execute("CREATE INDEX IF NOT EXISTS idx_gallery_created ON gallery(created_at DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_announcements_active ON announcements(active)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_admin_logs_created ON admin_logs(created_at DESC)")

@@ -47,7 +47,7 @@ CORS(
 )
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024  # 60 MB (photos + vidéos locales)
 
 app.register_blueprint(teams_bp)
 app.register_blueprint(matches_bp)
@@ -94,7 +94,7 @@ threading.Thread(target=_prewarm_cache, daemon=True).start()
 def _overload_guard():
     global _active_requests
     # Skip static/health routes — never shed those
-    if request.path in ("/api/health",) or request.path.startswith("/uploads"):
+    if request.path in ("/api/health",) or request.path.startswith("/uploads") or request.path.startswith("/api/video/"):
         return
     with _active_lock:
         if _active_requests >= MAX_CONCURRENT:

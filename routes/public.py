@@ -159,6 +159,42 @@ def get_gallery():
         return jsonify({"error": str(e)}), 500
 
 
+@public_bp.route("/api/video/<int:gallery_id>", methods=["GET"])
+def stream_video(gallery_id):
+    try:
+        with db_conn() as conn:
+            cur = get_cursor(conn)
+            cur.execute(
+                "SELECT v.video_data, v.content_type FROM gallery_videos v WHERE v.id = %s",
+                (gallery_id,)
+            )
+            row = cur.fetchone()
+            cur.close()
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        video_data = bytes(row["video_data"])
+        content_type = row["content_type"] or "video/mp4"
+        total = len(video_data)
+        range_header = request.headers.get("Range")
+        if range_header:
+            parts = range_header.replace("bytes=", "").split("-")
+            start = int(parts[0])
+            end = int(parts[1]) if parts[1] else total - 1
+            end = min(end, total - 1)
+            chunk = video_data[start:end + 1]
+            resp = Response(chunk, status=206, mimetype=content_type, direct_passthrough=True)
+            resp.headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+            resp.headers["Content-Length"] = len(chunk)
+        else:
+            resp = Response(video_data, status=200, mimetype=content_type, direct_passthrough=True)
+            resp.headers["Content-Length"] = total
+        resp.headers["Accept-Ranges"] = "bytes"
+        resp.headers["Cache-Control"] = "public, max-age=3600"
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @public_bp.route("/api/announcements", methods=["GET"])
 def get_announcements():
     try:
