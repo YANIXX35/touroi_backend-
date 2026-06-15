@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from database import db_conn, get_cursor
 from config import JWT_SECRET_KEY, JWT_EXPIRATION_HOURS, UPLOAD_FOLDER, ALLOWED_EXTENSIONS, MAX_PHOTO_SIZE
 from cache import invalidate as cache_invalidate, invalidate_prefix as cache_invalidate_prefix
+from routes.public import _player_cache, _player_lock
 import bcrypt
 import jwt
 import logging
@@ -555,6 +556,8 @@ def admin_update_player(player_id):
         cur.close()
     cache_invalidate("teams_list")
     cache_invalidate_prefix("team_detail_")
+    with _player_lock:
+        _player_cache.pop(player_id, None)
     return jsonify({"message": "Joueur mis à jour"})
 
 
