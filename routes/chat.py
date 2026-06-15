@@ -5,7 +5,7 @@ import urllib.request
 import urllib.error
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
-from threading import Lock
+from threading import Lock, Semaphore
 
 chat_bp = Blueprint("chat", __name__)
 _logger = logging.getLogger("chat")
@@ -30,10 +30,10 @@ Ce que tu sais sur le tournoi :
 
 Garde tes réponses concises (3-5 phrases max). Utilise des emojis avec modération."""
 
-# ─── Rate limiting (sliding window, in-memory) ────────────────────────────────
+# ─── Rate limiting par IP (sliding window) ────────────────────────────────────
 _requests: dict = {}
 _lock = Lock()
-_MAX_PER_MINUTE = 5
+_MAX_PER_MINUTE = 8          # messages max par utilisateur par minute
 
 
 def _check_rate_limit(ip: str) -> tuple[bool, str]:
@@ -46,6 +46,12 @@ def _check_rate_limit(ip: str) -> tuple[bool, str]:
         timestamps.append(now)
         _requests[ip] = timestamps
         return True, ""
+
+# ─── Sémaphore global — limite les appels Gemini simultanés ──────────────────
+# Gemini accepte ~10 requêtes parallèles ; on prend 6 pour rester confortable.
+# Les requêtes en excès attendent max 12s avant de recevoir un message d'attente.
+_gemini_sem = Semaphore(6)
+_SEM_TIMEOUT = 12   # secondes max d'attente en file
 
 
 # ─── Route ────────────────────────────────────────────────────────────────────
@@ -87,6 +93,14 @@ def chat():
         },
     }
 
+    # ── File d'attente : on attend un slot disponible vers Gemini ────────────
+    acquired = _gemini_sem.acquire(blocking=True, timeout=_SEM_TIMEOUT)
+    if not acquired:
+        _logger.warning("Semaphore timeout for IP %s", ip)
+        return jsonify({
+            "error": "L'assistant est très sollicité en ce moment. Réessayez dans quelques secondes 🙏"
+        }), 503
+
     try:
         body = json.dumps(payload).encode("utf-8")
         req  = urllib.request.Request(
@@ -95,7 +109,7 @@ def chat():
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=25) as resp:
             result = json.loads(resp.read().decode("utf-8"))
 
         candidates = result.get("candidates", [])
@@ -117,3 +131,5 @@ def chat():
     except Exception as e:
         _logger.error("Gemini error: %s", e)
         return jsonify({"error": "Assistant temporairement indisponible"}), 502
+    finally:
+        _gemini_sem.release()   # libère le slot même en cas d'erreur
