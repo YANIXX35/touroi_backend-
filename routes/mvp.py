@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify
 from database import db_conn, get_cursor
+from config import JWT_SECRET_KEY
+import jwt as pyjwt
 import os
 
 mvp_bp = Blueprint("mvp", __name__)
@@ -114,3 +116,22 @@ def cast_vote():
         cur.close()
 
     return jsonify({"success": True, "message": "Vote enregistré ! Merci !"})
+
+
+@mvp_bp.route("/api/mvp/reset", methods=["DELETE"])
+def reset_votes():
+    auth = request.headers.get("Authorization", "")
+    token = auth.replace("Bearer ", "").strip()
+    try:
+        pyjwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+    except Exception:
+        return jsonify({"error": "Non autorisé"}), 401
+
+    with db_conn() as conn:
+        cur = get_cursor(conn)
+        cur.execute("DELETE FROM mvp_votes")
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+
+    return jsonify({"success": True, "deleted": deleted})
