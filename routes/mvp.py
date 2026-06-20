@@ -30,6 +30,7 @@ CANDIDATES = [
         "team_name":   "Les Enfants s'Amusent",
         "role":        "Capitaine",
         "photo_url":   f"{API_BASE}/api/players/678/photo",
+        "is_mvp_winner": True,
     },
     {
         "player_id":   563,
